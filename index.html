@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>模块化推车 3D 实时工程预览系统</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    .glass-panel { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+    .btn-active { background-color: #2563eb !important; color: #ffffff !important; border-color: #3b82f6 !important; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+<div id="canvas-container" class="w-screen h-screen"></div>
+
+<!-- 左侧控制面板 -->
+<div class="fixed top-4 left-4 bottom-4 w-96 glass-panel rounded-2xl p-4 flex flex-col gap-4 overflow-y-auto shadow-2xl z-10">
+  <div class="border-b border-slate-700 pb-3">
+    <div class="flex items-center justify-between">
+      <h1 class="text-lg font-bold tracking-wide text-white">模块化推车 3D 预览</h1>
+      <span class="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">CAD 比例 1:1</span>
+    </div>
+    <p class="text-xs text-slate-400 mt-1">支持 15 单舱 / 35 双舱 / 三档宽度 / 折叠与拆装仿真</p>
+  </div>
+
+  <!-- 1. 形态模式与座舱选择 -->
+  <div class="space-y-2">
+    <label class="text-xs font-semibold uppercase tracking-wider text-slate-400">1. 座舱配置模式</label>
+    <div class="grid grid-cols-3 gap-1.5">
+      <button id="mode-single" onclick="setCabinMode('single')" class="py-1.5 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition btn-active">单舱 (15种)</button>
+      <button id="mode-double" onclick="setCabinMode('double')" class="py-1.5 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">双舱 (35种)</button>
+      <button id="mode-none" onclick="setCabinMode('none')" class="py-1.5 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">仅空车架</button>
+    </div>
+
+    <div id="cabin-select-wrap" class="pt-1">
+      <select id="cabin-select" onchange="onCabinChange(this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"></select>
+    </div>
+
+    <!-- 货舱桌板附件开关 -->
+    <div id="tray-option" class="hidden pt-1 flex items-center justify-between bg-slate-800/60 px-3 py-2 rounded-lg border border-slate-700/60">
+      <span id="tray-label" class="text-xs text-amber-300">附件：挂载货舱桌板</span>
+      <input type="checkbox" id="tray-toggle" onchange="updateScene()" class="w-4 h-4 accent-blue-600 rounded cursor-pointer" />
+    </div>
+  </div>
+
+  <!-- 2. 车架宽度调节 -->
+  <div class="space-y-2 border-t border-slate-800 pt-3">
+    <div class="flex justify-between items-center">
+      <label class="text-xs font-semibold uppercase tracking-wider text-slate-400">2. 主车架宽度 (不含轮)</label>
+      <span id="width-compat-hint" class="text-[11px] text-emerald-400">当前配置兼容</span>
+    </div>
+    <div class="grid grid-cols-3 gap-1.5">
+      <button id="width-380" onclick="setFrameWidth(380)" class="py-2 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">
+        <div class="font-bold">窄档 380</div>
+        <div class="text-[10px] opacity-75">旅行/小宠</div>
+      </button>
+      <button id="width-550" onclick="setFrameWidth(550)" class="py-2 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition btn-active">
+        <div class="font-bold">中档 550</div>
+        <div class="text-[10px] opacity-75">主用标准</div>
+      </button>
+      <button id="width-650" onclick="setFrameWidth(650)" class="py-2 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">
+        <div class="font-bold">宽档 650</div>
+        <div class="text-[10px] opacity-75">双胞胎/大舱</div>
+      </button>
+    </div>
+  </div>
+
+  <!-- 3. 车轮尺寸选择 -->
+  <div class="space-y-2 border-t border-slate-800 pt-3">
+    <label class="text-xs font-semibold uppercase tracking-wider text-slate-400">3. 四轮独立避震轮组</label>
+    <div class="grid grid-cols-3 gap-1.5">
+      <button id="wheel-S" onclick="setWheelSize('S')" class="py-2 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">
+        <div class="font-bold">小轮组</div>
+        <div class="text-[10px] opacity-75">前150 / 后200</div>
+      </button>
+      <button id="wheel-M" onclick="setWheelSize('M')" class="py-2 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition btn-active">
+        <div class="font-bold">中轮组</div>
+        <div class="text-[10px] opacity-75">前220 / 后300</div>
+      </button>
+      <button id="wheel-L" onclick="setWheelSize('L')" class="py-2 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">
+        <div class="font-bold">大轮组</div>
+        <div class="text-[10px] opacity-75">前260 / 后360</div>
+      </button>
+    </div>
+  </div>
+
+  <!-- 4. 整车折叠状态 -->
+  <div class="space-y-2 border-t border-slate-800 pt-3">
+    <div class="flex justify-between items-center">
+      <label class="text-xs font-semibold uppercase tracking-wider text-slate-400">4. 车架折叠状态</label>
+      <span id="fold-pct-label" class="text-xs font-mono text-blue-400">0% (完全展开)</span>
+    </div>
+    <div class="grid grid-cols-3 gap-1.5">
+      <button id="fold-0" onclick="setFoldProgress(0)" class="py-1.5 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition btn-active">展开状态</button>
+      <button id="fold-50" onclick="setFoldProgress(0.5)" class="py-1.5 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">折叠中 (50%)</button>
+      <button id="fold-100" onclick="setFoldProgress(1)" class="py-1.5 px-2 text-xs rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 transition">折叠后站立</button>
+    </div>
+    <div class="pt-1">
+      <input id="fold-slider" type="range" min="0" max="1" step="0.01" value="0" oninput="setFoldProgress(parseFloat(this.value))" class="w-full accent-blue-500 cursor-pointer" />
+      <div class="flex justify-between text-[10px] text-slate-500">
+        <span>展开锁定</span>
+        <span>主副梁共面收拢</span>
+        <span>把手+后轮独自站立</span>
+      </div>
+    </div>
+    <p id="fold-notice" class="hidden text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-2">
+      提示：硬质座舱在车架折叠时建议先行拆卸；仅 S15 小型软载货舱支持清空物品后随车折叠。已为您半透明化显示座舱以便观察车架折叠机构。
+    </p>
+  </div>
+
+  <!-- 5. 快拆部件状态 -->
+  <div class="space-y-2 border-t border-slate-800 pt-3">
+    <label class="text-xs font-semibold uppercase tracking-wider text-slate-400">5. 快拆组件状态切换</label>
+    <div class="space-y-1.5">
+      <label class="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 border border-slate-700/60 cursor-pointer hover:bg-slate-800">
+        <div>
+          <div class="text-xs font-medium text-white">四个独立避震车轮</div>
+          <div class="text-[10px] text-slate-400">拆下后显示快拆轴座与底盘姿态</div>
+        </div>
+        <input type="checkbox" id="toggle-wheels" checked onchange="updateScene()" class="w-4 h-4 accent-blue-600 rounded" />
+      </label>
+
+      <label class="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 border border-slate-700/60 cursor-pointer hover:bg-slate-800">
+        <div>
+          <div class="text-xs font-medium text-white">可拆卸把手 & 前后横杠</div>
+          <div class="text-[10px] text-slate-400">拆下后仅保留左右两侧主梁+副梁平面总成</div>
+        </div>
+        <input type="checkbox" id="toggle-bars" checked onchange="updateScene()" class="w-4 h-4 accent-blue-600 rounded" />
+      </label>
+
+      <label class="flex items-center justify-between p-2 rounded-lg bg-slate-800/60 border border-slate-700/60 cursor-pointer hover:bg-slate-800">
+        <div>
+          <div class="text-xs font-medium text-white">显示上/中/下三组座舱接口点</div>
+          <div class="text-[10px] text-slate-400">高亮显示主车架三组模块化卡扣位置</div>
+        </div>
+        <input type="checkbox" id="toggle-ports" checked onchange="updateScene()" class="w-4 h-4 accent-blue-600 rounded" />
+      </label>
+    </div>
+  </div>
+
+  <!-- 视角快捷重置 -->
+  <div class="border-t border-slate-800 pt-3 mt-auto">
+    <div class="grid grid-cols-4 gap-1.5">
+      <button onclick="setCameraView('iso')" class="py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded border border-slate-700">轴测图</button>
+      <button onclick="setCameraView('side')" class="py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded border border-slate-700">正侧视</button>
+      <button onclick="setCameraView('front')" class="py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded border border-slate-700">正前视</button>
+      <button onclick="setCameraView('top')" class="py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded border border-slate-700">俯视图</button>
+    </div>
+  </div>
+</div>
+
+<!-- 右上角工程参数实时看板 -->
+<div class="fixed top-4 right-4 w-88 glass-panel rounded-2xl p-4 shadow-2xl z-10 space-y-3 max-w-sm">
+  <div class="flex items-center justify-between border-b border-slate-700 pb-2">
+    <span class="text-xs font-bold uppercase tracking-wider text-blue-400">工程规格与配置核对</span>
+    <span id="spec-code" class="text-xs font-mono bg-blue-600 px-2 py-0.5 rounded text-white">S05</span>
+  </div>
+
+  <div class="grid grid-cols-2 gap-2 text-xs">
+    <div class="bg-slate-800/70 p-2 rounded-lg border border-slate-700/60">
+      <div class="text-[10px] text-slate-400">车架外宽 (不含轮)</div>
+      <div id="spec-frame-width" class="text-sm font-bold text-white mt-0.5">550 mm (中档)</div>
+    </div>
+    <div class="bg-slate-800/70 p-2 rounded-lg border border-slate-700/60">
+      <div class="text-[10px] text-slate-400">含轮整车外宽</div>
+      <div id="spec-total-width" class="text-sm font-bold text-emerald-400 mt-0.5">640 mm</div>
+    </div>
+    <div class="bg-slate-800/70 p-2 rounded-lg border border-slate-700/60">
+      <div class="text-[10px] text-slate-400">座舱接口占用</div>
+      <div id="spec-ports" class="text-xs font-semibold text-amber-300 mt-0.5">中位接口</div>
+    </div>
+    <div class="bg-slate-800/70 p-2 rounded-lg border border-slate-700/60">
+      <div class="text-[10px] text-slate-400">核定儿童人数</div>
+      <div id="spec-children" class="text-sm font-bold text-white mt-0.5">1 人</div>
+    </div>
+  </div>
+
+  <div class="text-xs space-y-1 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+    <div class="font-semibold text-slate-300" id="spec-title">单儿童坐席</div>
+    <div class="text-[11px] text-slate-400 leading-relaxed" id="spec-desc"></div>
+  </div>
+
+  <!-- 图例说明 -->
+  <div class="pt-1 border-t border-slate-800 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
+    <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></i>高位接口</span>
+    <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></i>中位接口</span>
+    <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></i>低位接口</span>
+    <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block"></i>可拆横杠/把手</span>
+  </div>
+</div>
+
+<!-- 底部操作提示 -->
+<div class="fixed bottom-4 right-4 glass-panel px-3 py-1.5 rounded-full text-xs text-slate-300 pointer-events-none">
+  🖱️ 左键拖拽：360°旋转 | 右键拖拽：平移 | 滚轮：缩放
+</div>
+
+<script>
+// ==========================================
+// 1. 完整工程数据库 (严格对应 stroller-design 文档)
+// ==========================================
+const WHEEL_SPECS = {
+  S: { name: '小轮组', frontDia: 150, frontWidth: 25, rearDia: 200, rearWidth: 30 },
+  M: { name: '中轮组', frontDia: 220, frontWidth: 35, rearDia: 300, rearWidth: 45 },
+  L: { name: '大轮组', frontDia: 260, frontWidth: 45, rearDia: 360, rearWidth: 60 }
+};
+
+const SINGLE_CABINS = [
+  { id: 'S01', name: '儿童轻便布兜', widths: [380], ports: ['HIGH', 'MID'], portLabel: '高＋中，软性侧边固定', children: 1, type: 'sling', desc: '窄档380专用，连接高、中两组接口，通过软性侧边固定，适合轻便旅行。' },
+  { id: 'S02', name: '小宠舱', widths: [380], ports: ['MID'], portLabel: '中位', children: 0, type: 'pet_s', desc: '窄档380专用独立小宠座舱，默认安装于中位接口。' },
+  { id: 'S03', name: '中宠舱', widths: [550], ports: ['MID'], portLabel: '中位', children: 0, type: 'pet_m', desc: '中档550专用，目标为一只中大型犬或多只中小宠物。' },
+  { id: 'S04', name: '大宠舱', widths: [650], ports: ['MID'], portLabel: '中位', children: 0, type: 'pet_l', desc: '宽档650专用，目标为两只中大型犬或一只超大型犬。' },
+  { id: 'S05', name: '单儿童坐席', widths: [550, 650], ports: ['MID'], portLabel: '中位', children: 1, type: 'seat_1', desc: '以中档550为主，宽档650使用短加宽转接件。' },
+  { id: 'S06', name: '婴儿睡篮', widths: [550, 650], ports: ['MID'], portLabel: '中位', children: 1, type: 'bassinet', desc: '平躺式婴儿睡篮，中档550为主，宽档650使用短加宽转接件。' },
+  { id: 'S07', name: '婴儿提篮', widths: [550, 650], ports: ['MID'], portLabel: '中位', children: 1, type: 'carrier', desc: '车载/推车两用婴儿提篮，中档550为主，宽档650配短加宽转接件。' },
+  { id: 'S08', name: '中型成人座舱', widths: [550], ports: ['HIGH', 'MID', 'LOW'], portLabel: '高＋中；脚踏接低位', children: 0, type: 'adult_m', desc: '中档550专用，面向体重较轻成人；保留两侧扶手、坐垫和靠背，不设前横杆，脚踏接低位。' },
+  { id: 'S09', name: '大型成人座舱', widths: [650], ports: ['HIGH', 'MID', 'LOW'], portLabel: '高＋中；脚踏接低位', children: 0, type: 'adult_l', desc: '宽档650专用，面向中等体重成人；连接高、中接口，脚踏连接低位接口。' },
+  { id: 'S10', name: '双胞胎并排坐席', widths: [650], ports: ['MID'], portLabel: '中位', children: 2, type: 'twin_seat', desc: '宽档650专用，作为一个独立安装模块提供左右并排两个儿童乘坐位置。' },
+  { id: 'S11', name: '两座儿童露营舱', widths: [550, 650], ports: ['MID'], portLabel: '中位', children: 2, type: 'camp_2', desc: '单独使用时前后各一座（共2人），支持中档550与宽档650；承重支承脚随舱拆走。' },
+  { id: 'S12', name: '四座儿童露营舱', widths: [650], ports: ['MID'], portLabel: '中位', children: 4, type: 'camp_4', desc: '宽档650专用，单独使用时前后各两座（共4人）；承重支承脚随舱拆走。' },
+  { id: 'S13', name: '中型载货舱', widths: [550], ports: ['MID'], portLabel: '中位', children: 0, type: 'cargo_m', tray: 'A01', desc: '中档550专用，可匹配中型桌板附件 A01（固定在货舱顶部框架）。' },
+  { id: 'S14', name: '大型载货舱', widths: [650], ports: ['MID'], portLabel: '中位', children: 0, type: 'cargo_l', tray: 'A02', desc: '宽档650专用，可匹配大型桌板附件 A02（固定在货舱顶部框架）。' },
+  { id: 'S15', name: '小型软载货舱', widths: [380], ports: ['LOW'], portLabel: '低位，窄档专用', children: 0, type: 'soft_cargo', desc: '窄档380独立快拆模块，软布兜+承重织带+短支承片；空袋支持随车折叠（设计目标3kg）。' }
+];
+
+const DOUBLE_CABINS = [
+  { id: 'D01', name: '小宠舱＋小宠舱', lower: 'S02', upper: 'S02', widths: [380], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 0 },
+  { id: 'D02', name: '单儿童坐席＋单儿童坐席', lower: 'S05', upper: 'S05', widths: [550, 650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 2 },
+  { id: 'D03', name: '婴儿睡篮＋婴儿睡篮', lower: 'S06', upper: 'S06', widths: [550, 650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 2 },
+  { id: 'D04', name: '婴儿提篮＋婴儿提篮', lower: 'S07', upper: 'S07', widths: [550, 650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 2 },
+  { id: 'D05', name: '单儿童坐席＋婴儿睡篮', lower: 'S05', upper: 'S06', widths: [550, 650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 2 },
+  { id: 'D06', name: '单儿童坐席＋婴儿提篮', lower: 'S05', upper: 'S07', widths: [550, 650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 2 },
+  { id: 'D07', name: '婴儿睡篮＋婴儿提篮', lower: 'S06', upper: 'S07', widths: [550, 650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 2 },
+  { id: 'D08', name: '中宠舱＋单儿童坐席', lower: 'S03', upper: 'S05', widths: [550], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D09', name: '中宠舱＋婴儿睡篮', lower: 'S03', upper: 'S06', widths: [550], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D10', name: '中宠舱＋婴儿提篮', lower: 'S03', upper: 'S07', widths: [550], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D11', name: '大宠舱＋单儿童坐席', lower: 'S04', upper: 'S05', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D12', name: '大宠舱＋婴儿睡篮', lower: 'S04', upper: 'S06', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D13', name: '大宠舱＋婴儿提篮', lower: 'S04', upper: 'S07', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D14', name: '中型载货舱＋单儿童坐席', lower: 'S13', upper: 'S05', widths: [550], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D15', name: '中型载货舱＋婴儿睡篮', lower: 'S13', upper: 'S06', widths: [550], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D16', name: '中型载货舱＋婴儿提篮', lower: 'S13', upper: 'S07', widths: [550], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D17', name: '大型载货舱＋单儿童坐席', lower: 'S14', upper: 'S05', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D18', name: '大型载货舱＋婴儿睡篮', lower: 'S14', upper: 'S06', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D19', name: '大型载货舱＋婴儿提篮', lower: 'S14', upper: 'S07', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 1 },
+  { id: 'D20', name: '两座儿童露营舱＋单儿童坐席', lower: 'S11', upper: 'S05', widths: [550, 650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 2 },
+  { id: 'D21', name: '两座儿童露营舱＋婴儿睡篮', lower: 'S11', upper: 'S06', widths: [550, 650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 2 },
+  { id: 'D22', name: '两座儿童露营舱＋婴儿提篮', lower: 'S11', upper: 'S07', widths: [550, 650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 2 },
+  { id: 'D23', name: '单儿童坐席＋双胞胎并排坐席', lower: 'S05', upper: 'S10', widths: [650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 3 },
+  { id: 'D24', name: '婴儿睡篮＋双胞胎并排坐席', lower: 'S06', upper: 'S10', widths: [650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 3 },
+  { id: 'D25', name: '婴儿提篮＋双胞胎并排坐席', lower: 'S07', upper: 'S10', widths: [650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 3 },
+  { id: 'D26', name: '双胞胎并排坐席＋双胞胎并排坐席', lower: 'S10', upper: 'S10', widths: [650], ports: ['LOW', 'HIGH'], portLabel: '低＋高', children: 4 },
+  { id: 'D27', name: '大宠舱＋双胞胎并排坐席', lower: 'S04', upper: 'S10', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 2 },
+  { id: 'D28', name: '大型载货舱＋双胞胎并排坐席', lower: 'S14', upper: 'S10', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 2 },
+  { id: 'D29', name: '两座儿童露营舱＋双胞胎并排坐席', lower: 'S11', upper: 'S10', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 3 },
+  { id: 'D30', name: '四座儿童露营舱＋单儿童坐席', lower: 'S12', upper: 'S05', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 3 },
+  { id: 'D31', name: '四座儿童露营舱＋婴儿睡篮', lower: 'S12', upper: 'S06', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 3 },
+  { id: 'D32', name: '四座儿童露营舱＋婴儿提篮', lower: 'S12', upper: 'S07', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 3 },
+  { id: 'D33', name: '四座儿童露营舱＋双胞胎并排坐席', lower: 'S12', upper: 'S10', widths: [650], ports: ['MID', 'HIGH'], portLabel: '中＋高', children: 4 },
+  { id: 'D34', name: '小型软载货舱＋儿童轻便布兜', lower: 'S15', upper: 'S01', widths: [380], ports: ['LOW', 'MID', 'HIGH'], portLabel: '低＋中高', children: 1 },
+  { id: 'D35', name: '小型软载货舱＋小宠舱', lower: 'S15', upper: 'S02', widths: [380], ports: ['LOW', 'MID'], portLabel: '低＋中', children: 0 }
+];
+
+// ==========================================
+// 2. 状态管理
+// ==========================================
+const state = {
+  cabinMode: 'single', // 'single' | 'double' | 'none'
+  selectedId: 'S05',
+  frameWidth: 550,     // 380 | 550 | 650 (mm)
+  wheelSize: 'M',      // 'S' | 'M' | 'L'
+  foldProgress: 0,     // 0.0 ~ 1.0
+  wheelsAttached: true,
+  barsAttached: true,
+  showPorts: true,
+  showTray: false
+};
+
+// ==========================================
+// 3. Three.js 场景初始化 (1单位 = 1mm)
+// ==========================================
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f172a);
+
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 10, 15000);
+camera.position.set(1450, 950, 1550);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 420, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.maxPolarAngle = Math.PI / 2 + 0.08;
+controls.minDistance = 400;
+controls.maxDistance = 4500;
+
+// 灯光系统
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+dirLight.position.set(1200, 2200, 1400);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+scene.add(dirLight);
+
+const backLight = new THREE.DirectionalLight(0x60a5fa, 0.35);
+backLight.position.set(-1200, 800, -1000);
+scene.add(backLight);
+
+// 地面网格与基准坐标
+const gridHelper = new THREE.GridHelper(3000, 30, 0x334155, 0x1e293b);
+gridHelper.position.y = 0;
+scene.add(gridHelper);
+
+// 整车根容器
+const strollerRoot = new THREE.Group();
+scene.add(strollerRoot);
+
+// 公共材质库
+const MATS = {
+  mainFrame: new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.65, roughness: 0.3 }),
+  subFrame: new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.55, roughness: 0.35 }),
+  joint: new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.4, roughness: 0.5 }),
+  detachBar: new THREE.MeshStandardMaterial({ color: 0x0ea5e9, metalness: 0.5, roughness: 0.3 }),
+  handleGrip: new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.85 }),
+  tire: new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 }),
+  rim: new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.7, roughness: 0.25 }),
+  spring: new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8, roughness: 0.2 }),
+  brakePedal: new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.4 }),
+  portHigh: new THREE.MeshStandardMaterial({ color: 0xf43f5e, emissive: 0x881337, emissiveIntensity: 0.35 }),
+  portMid: new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0x78350f, emissiveIntensity: 0.35 }),
+  portLow: new THREE.MeshStandardMaterial({ color: 0x34d399, emissive: 0x064e3b, emissiveIntensity: 0.35 }),
+  adapter: new THREE.MeshStandardMaterial({ color: 0xa855f7, metalness: 0.4, roughness: 0.4 })
+};
+
+// 工具函数：在两点间创建圆柱连杆或方管
+function createTubeBetween(p1, p2, radius, material) {
+  const dir = new THREE.Vector3().subVectors(p2, p1);
+  const len = dir.length();
+  const geom = new THREE.CylinderGeometry(radius, radius, len, 16);
+  const mesh = new THREE.Mesh(geom, material);
+  mesh.position.copy(p1).add(p2).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+  mesh.castShadow = true;
+  return mesh;
+}
+
+function createBoxBetween(p1, p2, thicknessY, widthX, material) {
+  const dir = new THREE.Vector3().subVectors(p2, p1);
+  const len = dir.length();
+  const geom = new THREE.BoxGeometry(widthX, len, thicknessY);
+  const mesh = new THREE.Mesh(geom, material);
+  mesh.position.copy(p1).add(p2).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+  mesh.castShadow = true;
+  return mesh;
+}
+
+// ==========================================
+// 4. 运动学与几何坐标计算 (支持展开 -> 折叠站立)
+// ==========================================
+function computeKinematics(fold, wheelSpec, wheelsOn) {
+  const rRear = wheelsOn ? wheelSpec.rearDia / 2 : 28;
+  const rFront = wheelsOn ? wheelSpec.frontDia / 2 : 28;
+  const lerp = THREE.MathUtils.lerp;
+
+  // 坐标约定：Z轴向前(+)，Z轴向后(-)，Y轴向上(+)，X轴左右对称
+  // 后轮中心始终作为基准锚点 (Z = -260)
+  const rearWheelCenter = new THREE.Vector3(0, rRear, -260);
+
+  // 前轮中心：展开时在前方 Z=+340；折叠后收回至后轮前侧 Z=-55，且离地微抬便于后轮+把手站立
+  const frontWheelCenter = new THREE.Vector3(
+    0,
+    lerp(rFront, rRear + 15, fold),
+    lerp(340, -55, fold)
+  );
+
+  // 前轮上方独立避震顶端 (前横杠连接处)
+  const frontStrutTop = new THREE.Vector3(
+    0,
+    frontWheelCenter.y + rFront + 65,
+    frontWheelCenter.z - 15
+  );
+
+  // 后轮上方避震顶端 (后横杠连接处)
+  const rearStrutTop = new THREE.Vector3(
+    0,
+    rearWheelCenter.y + rRear + 55,
+    rearWheelCenter.z
+  );
+
+  // 主梁中点折叠铰链 (Mid Hinge)
+  const mainHinge = new THREE.Vector3(
+    0,
+    lerp(560, 620, fold),
+    lerp(40, -195, fold)
+  );
+
+  // 主梁上端 (把手安装座)：展开时在后上方 (Y=860, Z=-240)；
+  // 折叠后翻转至后车轮后侧下方 (Y=310, Z=-420)，使把手尾端刚好在后轮后侧触地 (Y=0, Z=-480) 实现独自站立
+  const mainTop = new THREE.Vector3(
+    0,
+    lerp(860, 300, fold),
+    lerp(-240, -425, fold)
+  );
+
+  // 把手顶端横梁位置：展开时高1030mm；折叠后触地 (Y=18, Z=-475) 与两个后轮形成三角稳固自站立
+  const handleTip = new THREE.Vector3(
+    0,
+    lerp(1030, 16, fold),
+    lerp(-355, -475, fold)
+  );
+
+  // 副梁关键节点 (与主梁在同一X平面内连接，确保主梁、副梁完全共面)
+  const subRear = rearStrutTop.clone();
+  const subMid = new THREE.Vector3(
+    0,
+    lerp(430, 390, fold),
+    lerp(-140, -245, fold)
+  );
+  const subFront = new THREE.Vector3(
+    0,
+    lerp(430, 490, fold),
+    lerp(205, -135, fold)
+  );
+
+  // 上、中、下三组座舱连接点 (布置于主车架平面上)
+  const portHigh = new THREE.Vector3(
+    0,
+    lerp(725, 495, fold),
+    lerp(-105, -310, fold)
+  );
+  const portMid = mainHinge.clone();
+  const portLow = new THREE.Vector3(
+    0,
+    lerp(365, 360, fold),
+    lerp(145, -155, fold)
+  );
+
+  return {
+    rRear, rFront,
+    rearWheelCenter, frontWheelCenter,
+    frontStrutTop, rearStrutTop,
+    mainHinge, mainTop, handleTip,
+    subRear, subMid, subFront,
+    portHigh, portMid, portLow
+  };
+}
+
+// ==========================================
+// 5. 构建车轮与独立避震模块
+// ==========================================
+function buildWheelAssembly(isFront, sideSign, xSide, kine, wheelSpec, wheelsOn) {
+  const group = new THREE.Group();
+  const center = isFront ? kine.frontWheelCenter : kine.rearWheelCenter;
+  const strutTop = isFront ? kine.frontStrutTop : kine.rearStrutTop;
+  const radius = isFront ? wheelSpec.frontDia / 2 : wheelSpec.rearDia / 2;
+  const tireW = isFront ? wheelSpec.frontWidth : wheelSpec.rearWidth;
+
+  // 轮组外置偏移：车架外宽为 frameWidth，车轮安装在车架外侧
+  const wheelX = xSide + sideSign * (tireW / 2 + 12);
+
+  // 避震支柱 (前轮避震在轮子上方，四轮独立弹性工作)
+  const pTop = new THREE.Vector3(xSide, strutTop.y, strutTop.z);
+  const pWheelMount = new THREE.Vector3(xSide, center.y + radius + 15, center.z);
+  group.add(createTubeBetween(pTop, pWheelMount, 11, MATS.subFrame));
+
+  // 独立螺旋避震弹簧圈
+  const springPos = pTop.clone().lerp(pWheelMount, 0.55);
+  const springMesh = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, 42, 16), MATS.spring);
+  springMesh.position.copy(springPos);
+  group.add(springMesh);
+
+  // 前叉/后轴连接座
+  const forkTop = new THREE.Vector3(wheelX, center.y + radius + 12, center.z);
+  group.add(createTubeBetween(pWheelMount, forkTop, 9, MATS.joint));
+  const axlePos = new THREE.Vector3(wheelX, center.y, center.z);
+  group.add(createTubeBetween(forkTop, axlePos, 8, MATS.joint));
+
+  if (wheelsOn) {
+    // 轮胎
+    const tireGeom = new THREE.CylinderGeometry(radius, radius, tireW, 32);
+    tireGeom.rotateZ(Math.PI / 2);
+    const tireMesh = new THREE.Mesh(tireGeom, MATS.tire);
+    tireMesh.position.copy(axlePos);
+    tireMesh.castShadow = true;
+    group.add(tireMesh);
+
+    // 轮毂
+    const rimGeom = new THREE.CylinderGeometry(radius * 0.62, radius * 0.62, tireW + 2, 24);
+    rimGeom.rotateZ(Math.PI / 2);
+    const rimMesh = new THREE.Mesh(rimGeom, MATS.rim);
+    rimMesh.position.copy(axlePos);
+    group.add(rimMesh);
+
+    // 轮毂轴承盖
+    const capGeom = new THREE.CylinderGeometry(20, 20, tireW + 6, 16);
+    capGeom.rotateZ(Math.PI / 2);
+    const capMesh = new THREE.Mesh(capGeom, MATS.detachBar);
+    capMesh.position.copy(axlePos);
+    group.add(capMesh);
+  } else {
+    // 车轮拆下后的快拆接口状态提示
+    const stubGeom = new THREE.CylinderGeometry(14, 14, 24, 16);
+    stubGeom.rotateZ(Math.PI / 2);
+    const stubMesh = new THREE.Mesh(stubGeom, MATS.portHigh);
+    stubMesh.position.copy(axlePos);
+    group.add(stubMesh);
+  }
+
+  return group;
+}
+
+// ==========================================
+// 6. 构建 15 种模块化座舱 3D 几何体
+// ==========================================
+function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, foldProgress) {
+  const spec = SINGLE_CABINS.find(c => c.id === cabinId);
+  if (!spec) return new THREE.Group();
+
+  const group = new THREE.Group();
+  const isTransparent = foldProgress > 0.05 && cabinId !== 'S15';
+  const opacityVal = isTransparent ? 0.28 : 0.96;
+
+  const makeMat = (hex, rough = 0.5) => new THREE.MeshStandardMaterial({
+    color: hex,
+    roughness: rough,
+    transparent: isTransparent,
+    opacity: opacityVal
+  });
+
+  // 决定座舱锚点高度与前后位置
+  let anchor = new THREE.Vector3();
+  if (placement === 'HIGH') {
+    anchor.copy(kine.portHigh).add(new THREE.Vector3(0, 45, 25));
+  } else if (placement === 'LOW') {
+    anchor.copy(kine.portLow).add(new THREE.Vector3(0, 35, 35));
+  } else {
+    anchor.copy(kine.portMid).add(new THREE.Vector3(0, 30, 0));
+  }
+
+  // 计算座舱自身标准宽度（跨档位的小型儿童模块在650宽档下使用短加宽转接件）
+  let moduleNativeW = frameWidth - 36;
+  let needShortAdapter = false;
+  if (['S05', 'S06', 'S07'].includes(cabinId) && frameWidth === 650) {
+    moduleNativeW = 550 - 36;
+    needShortAdapter = true;
+  }
+
+  // 绘制短加宽转接件 (宽档650安装中档儿童模块时自动生成紫色转接臂)
+  if (needShortAdapter) {
+    [-1, 1].forEach(sign => {
+      const pOuter = new THREE.Vector3(sign * (frameWidth / 2 - 14), anchor.y - 20, anchor.z);
+      const pInner = new THREE.Vector3(sign * (moduleNativeW / 2), anchor.y - 20, anchor.z);
+      group.add(createBoxBetween(pOuter, pInner, 26, 26, MATS.adapter));
+    });
+  }
+
+  // 根据 15 种不同形态构建具有辨识度的工程模型
+  switch (cabinId) {
+    case 'S01': {
+      // 儿童轻便布兜：连接高+中接口，软性侧边固定
+      const pH = kine.portHigh;
+      const pM = kine.portMid;
+      const center = pH.clone().lerp(pM, 0.5).add(new THREE.Vector3(0, -15, 20));
+      const slingMat = makeMat(0x38bdf8, 0.75);
+      // 靠背与兜底
+      const back = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 20, 310, 22), slingMat);
+      back.position.set(0, center.y + 40, center.z - 50);
+      back.rotation.x = -0.25;
+      group.add(back);
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 20, 20, 210), slingMat);
+      seat.position.set(0, center.y - 95, center.z + 35);
+      group.add(seat);
+      // 软性侧边固定织带 (连向高、中接口)
+      [-1, 1].forEach(s => {
+        const x = s * (frameWidth / 2 - 14);
+        group.add(createTubeBetween(new THREE.Vector3(x, pH.y, pH.z), new THREE.Vector3(s * (moduleNativeW / 2 - 15), center.y + 120, center.z - 40), 5, MATS.portHigh));
+        group.add(createTubeBetween(new THREE.Vector3(x, pM.y, pM.z), new THREE.Vector3(s * (moduleNativeW / 2 - 15), center.y - 80, center.z + 40), 5, MATS.portMid));
+      });
+      break;
+    }
+
+    case 'S02':
+    case 'S03':
+    case 'S04': {
+      // 小/中/大宠舱：上方安装儿童模块时采用低顶/拆顶状态
+      const len = cabinId === 'S02' ? 420 : (cabinId === 'S03' ? 540 : 660);
+      const baseH = cabinId === 'S02' ? 210 : 250;
+      const bodyMat = makeMat(0x10b981, 0.55);
+      const meshMat = makeMat(0xd1fae5, 0.4);
+
+      const box = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, baseH, len), bodyMat);
+      box.position.set(0, anchor.y + baseH / 2 - 20, anchor.z);
+      group.add(box);
+
+      // 若是单舱或处于上方，显示拱形透气顶棚；若在双舱下方则采用低顶状态避免抬高儿童模块
+      const isLowerInDouble = isDoubleMode && placement !== 'HIGH';
+      if (!isLowerInDouble) {
+        const dome = new THREE.Mesh(
+          new THREE.CylinderGeometry(moduleNativeW / 2, moduleNativeW / 2, len - 20, 20, 1, false, 0, Math.PI),
+          meshMat
+        );
+        dome.rotation.z = Math.PI / 2;
+        dome.rotation.y = Math.PI / 2;
+        dome.position.set(0, anchor.y + baseH - 20, anchor.z);
+        group.add(dome);
+      }
+      break;
+    }
+
+    case 'S05': {
+      // 单儿童坐席
+      const seatMat = makeMat(0x3b82f6, 0.5);
+      const frameMat = makeMat(0xcbd5e1, 0.3);
+      const seatBase = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 35, 250), seatMat);
+      seatBase.position.set(0, anchor.y, anchor.z + 20);
+      group.add(seatBase);
+
+      const backrest = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 340, 35), seatMat);
+      backrest.position.set(0, anchor.y + 160, anchor.z - 95);
+      backrest.rotation.x = -0.18;
+      group.add(backrest);
+
+      // 遮阳篷与前扶手
+      const canopy = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW + 10, 25, 190), frameMat);
+      canopy.position.set(0, anchor.y + 325, anchor.z - 20);
+      group.add(canopy);
+      const armBar = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 20, 20), frameMat);
+      armBar.position.set(0, anchor.y + 85, anchor.z + 135);
+      group.add(armBar);
+      break;
+    }
+
+    case 'S06': {
+      // 婴儿睡篮
+      const bassinetMat = makeMat(0x8b5cf6, 0.55);
+      const innerMat = makeMat(0xf8fafc, 0.7);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 210, 620), bassinetMat);
+      body.position.set(0, anchor.y + 65, anchor.z);
+      group.add(body);
+      const mattress = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 28, 30, 580), innerMat);
+      mattress.position.set(0, anchor.y + 160, anchor.z);
+      group.add(mattress);
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW + 6, 140, 230), bassinetMat);
+      hood.position.set(0, anchor.y + 230, anchor.z - 180);
+      group.add(hood);
+      break;
+    }
+
+    case 'S07': {
+      // 婴儿提篮 (带弧形提手)
+      const carrierMat = makeMat(0xec4899, 0.5);
+      const shell = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 180, 480), carrierMat);
+      shell.position.set(0, anchor.y + 55, anchor.z);
+      shell.rotation.x = 0.1;
+      group.add(shell);
+      // 顶部提篮把手
+      const handleArch = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW + 16, 220, 28), MATS.subFrame);
+      handleArch.position.set(0, anchor.y + 190, anchor.z);
+      group.add(handleArch);
+      break;
+    }
+
+    case 'S08':
+    case 'S09': {
+      // 中型/大型成人座舱：连接高+中接口，脚踏连接低位接口；保留两侧扶手、坐垫和靠背，不增加坐垫上方横杆
+      const adultMat = makeMat(0x6366f1, 0.45);
+      const seatY = kine.portMid.y + 20;
+      const seatZ = kine.portMid.z + 25;
+
+      // 宽厚坐垫
+      const cushion = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 55, 360), adultMat);
+      cushion.position.set(0, seatY, seatZ);
+      group.add(cushion);
+
+      // 高靠背 (连向高位接口)
+      const back = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 440, 50), adultMat);
+      back.position.set(0, seatY + 210, seatZ - 165);
+      back.rotation.x = -0.15;
+      group.add(back);
+
+      // 两侧独立扶手 (严格不设前横杆)
+      [-1, 1].forEach(s => {
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(28, 25, 290), MATS.mainFrame);
+        arm.position.set(s * (moduleNativeW / 2 - 14), seatY + 115, seatZ - 15);
+        group.add(arm);
+        const armPost = new THREE.Mesh(new THREE.BoxGeometry(24, 110, 24), MATS.subFrame);
+        armPost.position.set(s * (moduleNativeW / 2 - 14), seatY + 55, seatZ + 110);
+        group.add(armPost);
+      });
+
+      // 低位接口连接的成人脚踏板
+      const footPos = kine.portLow.clone();
+      const footplate = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 40, 20, 170), MATS.mainFrame);
+      footplate.position.set(0, footPos.y - 60, footPos.z + 110);
+      group.add(footplate);
+      [-1, 1].forEach(s => {
+        group.add(createTubeBetween(
+          new THREE.Vector3(s * (moduleNativeW / 2 - 25), footPos.y, footPos.z),
+          new THREE.Vector3(s * (moduleNativeW / 2 - 25), footPos.y - 60, footPos.z + 95),
+          10, MATS.subFrame
+        ));
+      });
+      break;
+    }
+
+    case 'S10': {
+      // 双胞胎并排坐席 (1个独立模块含左右2个座位)
+      const twinMat = makeMat(0x0284c7, 0.5);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 35, 270), MATS.mainFrame);
+      base.position.set(0, anchor.y, anchor.z + 15);
+      group.add(base);
+
+      const singleSeatW = (moduleNativeW - 26) / 2;
+      [-1, 1].forEach(s => {
+        const xCenter = s * (singleSeatW / 2 + 6);
+        const sPad = new THREE.Mesh(new THREE.BoxGeometry(singleSeatW, 25, 250), twinMat);
+        sPad.position.set(xCenter, anchor.y + 25, anchor.z + 20);
+        group.add(sPad);
+
+        const sBack = new THREE.Mesh(new THREE.BoxGeometry(singleSeatW, 320, 32), twinMat);
+        sBack.position.set(xCenter, anchor.y + 175, anchor.z - 90);
+        sBack.rotation.x = -0.15;
+        group.add(sBack);
+      });
+      break;
+    }
+
+    case 'S11':
+    case 'S12': {
+      // 两座 / 四座儿童露营舱 (带随舱拆走的支承脚，参与双舱时后排拆座或停用)
+      const campMat = makeMat(0xd97706, 0.6);
+      const boxLen = cabinId === 'S11' ? 660 : 760;
+      const wallH = 230;
+      const wagon = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, wallH, boxLen), campMat);
+      wagon.position.set(0, anchor.y + 40, anchor.z + 20);
+      group.add(wagon);
+
+      // 前排座椅
+      const frontBench = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 30, 60, 140), MATS.mainFrame);
+      frontBench.position.set(0, anchor.y + 70, anchor.z + 180);
+      group.add(frontBench);
+
+      // 后排座椅：仅在单舱模式下启用，双舱模式下拆座/停用
+      if (!isDoubleMode) {
+        const rearBench = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 30, 60, 140), MATS.mainFrame);
+        rearBench.position.set(0, anchor.y + 70, anchor.z - 140);
+        group.add(rearBench);
+      }
+
+      // 随露营舱拆走的底部承重支承脚
+      [-1, 1].forEach(s => {
+        const legTop = new THREE.Vector3(s * (moduleNativeW / 2 - 20), anchor.y - 60, anchor.z + 220);
+        const legBot = new THREE.Vector3(s * (moduleNativeW / 2 - 20), kine.frontWheelCenter.y + 35, anchor.z + 220);
+        group.add(createTubeBetween(legTop, legBot, 9, MATS.subFrame));
+      });
+      break;
+    }
+
+    case 'S13':
+    case 'S14': {
+      // 中型 / 大型载货舱 (可选配顶部桌板 A01 / A02)
+      const cargoMat = makeMat(0x475569, 0.6);
+      const cargoLen = cabinId === 'S13' ? 540 : 650;
+      const cargoH = 220;
+      const bin = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, cargoH, cargoLen), cargoMat);
+      bin.position.set(0, anchor.y + 30, anchor.z);
+      group.add(bin);
+
+      // 桌板附件 A01/A02 (仅单舱模式或无干涉时挂载于货舱顶部框架)
+      if (state.showTray && !isDoubleMode) {
+        const trayMat = makeMat(0xf59e0b, 0.35);
+        const tray = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW + 16, 18, cargoLen + 16), trayMat);
+        tray.position.set(0, anchor.y + 30 + cargoH / 2 + 12, anchor.z);
+        group.add(tray);
+      }
+      break;
+    }
+
+    case 'S15': {
+      // 小型软载货舱：窄档低位独立快拆，软布兜+承重织带+短支承片；支持随车折叠
+      const softMat = new THREE.MeshStandardMaterial({ color: 0x0d9488, roughness: 0.8 });
+      const lowP = kine.portLow;
+      const bagH = state.foldProgress > 0.3 ? 75 : 165;
+      const bagLen = state.foldProgress > 0.3 ? 190 : 320;
+      const bag = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 24, bagH, bagLen), softMat);
+      bag.position.set(0, lowP.y - 35, lowP.z + 35);
+      group.add(bag);
+
+      // 两侧低位短支承片与张紧织带
+      [-1, 1].forEach(s => {
+        const pPort = new THREE.Vector3(s * (frameWidth / 2 - 14), lowP.y, lowP.z);
+        const pBag = new THREE.Vector3(s * (moduleNativeW / 2 - 12), lowP.y - 25, lowP.z + 35);
+        group.add(createTubeBetween(pPort, pBag, 6, MATS.portLow));
+      });
+      break;
+    }
+  }
+
+  return group;
+}
+
+// ==========================================
+// 7. 场景主更新函数
+// ==========================================
+function updateScene() {
+  // 清空旧模型
+  while (strollerRoot.children.length > 0) {
+    strollerRoot.remove(strollerRoot.children[0]);
+  }
+
+  state.wheelsAttached = document.getElementById('toggle-wheels').checked;
+  state.barsAttached = document.getElementById('toggle-bars').checked;
+  state.showPorts = document.getElementById('toggle-ports').checked;
+  state.showTray = document.getElementById('tray-toggle').checked;
+
+  const wheelSpec = WHEEL_SPECS[state.wheelSize];
+  const kine = computeKinematics(state.foldProgress, wheelSpec, state.wheelsAttached);
+
+  // 车架外宽 = state.frameWidth (380 / 550 / 650mm)，单根侧梁厚度28mm
+  const tubeThickness = 28;
+  const xCenterOffset = state.frameWidth / 2 - tubeThickness / 2;
+
+  // 1) 构建左右对称的主梁 + 副梁 (主梁与副梁严格处于同一X平面 x = ±xCenterOffset)
+  [-1, 1].forEach(sideSign => {
+    const x = sideSign * xCenterOffset;
+
+    const pFrontStrut = new THREE.Vector3(x, kine.frontStrutTop.y, kine.frontStrutTop.z);
+    const pMainHinge  = new THREE.Vector3(x, kine.mainHinge.y, kine.mainHinge.z);
+    const pMainTop    = new THREE.Vector3(x, kine.mainTop.y, kine.mainTop.z);
+
+    const pSubRear    = new THREE.Vector3(x, kine.subRear.y, kine.subRear.z);
+    const pSubMid     = new THREE.Vector3(x, kine.subMid.y, kine.subMid.z);
+    const pSubFront   = new THREE.Vector3(x, kine.subFront.y, kine.subFront.z);
+
+    // 主梁下半段 (前避震顶 -> 主梁折叠铰链)
+    strollerRoot.add(createBoxBetween(pFrontStrut, pMainHinge, 34, tubeThickness, MATS.mainFrame));
+    // 主梁上半段 (主梁折叠铰链 -> 把手接口端)
+    strollerRoot.add(createBoxBetween(pMainHinge, pMainTop, 34, tubeThickness, MATS.mainFrame));
+
+    // 主梁中间折叠机构圆盘
+    const hingeCyl = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, tubeThickness + 8, 24), MATS.joint);
+    hingeCyl.rotation.z = Math.PI / 2;
+    hingeCyl.position.copy(pMainHinge);
+    strollerRoot.add(hingeCyl);
+
+    // 副梁 (与主梁在同一个 X 平面内连接：后轮支柱顶 -> 副梁中折点 -> 副梁前连点 + 主梁上连杆)
+    strollerRoot.add(createBoxBetween(pSubRear, pSubMid, 24, tubeThickness - 4, MATS.subFrame));
+    strollerRoot.add(createBoxBetween(pSubMid, pSubFront, 24, tubeThickness - 4, MATS.subFrame));
+    // 副梁与主梁上半部的联动折杆 (同一平面 X)
+    const pUpperLink = pMainHinge.clone().lerp(pMainTop, 0.42);
+    strollerRoot.add(createBoxBetween(pSubMid, pUpperLink, 20, tubeThickness - 6, MATS.subFrame));
+
+    // 上、中、下三组座舱连接点 (高亮显示在主车架内侧/顶部)
+    if (state.showPorts) {
+      const ports = [
+        { pos: kine.portHigh, mat: MATS.portHigh },
+        { pos: kine.portMid,  mat: MATS.portMid },
+        { pos: kine.portLow,  mat: MATS.portLow }
+      ];
+      ports.forEach(pt => {
+        const portMesh = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, tubeThickness + 14, 20), pt.mat);
+        portMesh.rotation.z = Math.PI / 2;
+        portMesh.position.set(x, pt.pos.y, pt.pos.z);
+        strollerRoot.add(portMesh);
+      });
+    }
+
+    // 四个独立避震车轮总成
+    strollerRoot.add(buildWheelAssembly(true, sideSign, x, kine, wheelSpec, state.wheelsAttached));
+    strollerRoot.add(buildWheelAssembly(false, sideSign, x, kine, wheelSpec, state.wheelsAttached));
+  });
+
+  // 2) 可拆卸把手 & 可拆卸前后横杠 (决定三种车架宽度)
+  if (state.barsAttached) {
+    // 可拆卸前横杠
+    const fLeft = new THREE.Vector3(-xCenterOffset, kine.frontStrutTop.y, kine.frontStrutTop.z);
+    const fRight = new THREE.Vector3(xCenterOffset, kine.frontStrutTop.y, kine.frontStrutTop.z);
+    strollerRoot.add(createTubeBetween(fLeft, fRight, 14, MATS.detachBar));
+
+    // 可拆卸后横杠 (外管承重、内部轴传递停车动作)
+    const rLeft = new THREE.Vector3(-xCenterOffset, kine.rearStrutTop.y, kine.rearStrutTop.z);
+    const rRight = new THREE.Vector3(xCenterOffset, kine.rearStrutTop.y, kine.rearStrutTop.z);
+    strollerRoot.add(createTubeBetween(rLeft, rRight, 16, MATS.detachBar));
+
+    // 单踏板联动两后轮刹车 (置于后横杠靠右可踩位置)
+    const brakePedal = new THREE.Mesh(new THREE.BoxGeometry(48, 16, 65), MATS.brakePedal);
+    brakePedal.position.set(xCenterOffset * 0.55, kine.rearStrutTop.y - 10, kine.rearStrutTop.z - 32);
+    brakePedal.rotation.x = -0.3;
+    strollerRoot.add(brakePedal);
+
+    // 可拆卸U型推车把手
+    [-1, 1].forEach(sideSign => {
+      const x = sideSign * xCenterOffset;
+      const pStart = new THREE.Vector3(x, kine.mainTop.y, kine.mainTop.z);
+      const pEnd   = new THREE.Vector3(x, kine.handleTip.y, kine.handleTip.z);
+      strollerRoot.add(createTubeBetween(pStart, pEnd, 13, MATS.detachBar));
+    });
+    const hLeft = new THREE.Vector3(-xCenterOffset, kine.handleTip.y, kine.handleTip.z);
+    const hRight = new THREE.Vector3(xCenterOffset, kine.handleTip.y, kine.handleTip.z);
+    strollerRoot.add(createTubeBetween(hLeft, hRight, 15, MATS.handleGrip));
+  }
+
+  // 3) 挂载当前选中的单舱或双舱模块
+  if (state.cabinMode === 'single') {
+    const spec = SINGLE_CABINS.find(c => c.id === state.selectedId);
+    if (spec) {
+      const primaryPort = spec.ports.includes('LOW') && spec.ports.length === 1 ? 'LOW' : 'MID';
+      strollerRoot.add(buildCabinModel(spec.id, primaryPort, kine, state.frameWidth, false, state.foldProgress));
+    }
+  } else if (state.cabinMode === 'double') {
+    const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
+    if (dSpec) {
+      // 下方模块 + 上方模块
+      const lowerPlacement = dSpec.ports[0]; // 'LOW' 或 'MID'
+      const upperPlacement = dSpec.ports[dSpec.ports.length - 1]; // 'HIGH' 或 'MID'
+      strollerRoot.add(buildCabinModel(dSpec.lower, lowerPlacement, kine, state.frameWidth, true, state.foldProgress));
+      strollerRoot.add(buildCabinModel(dSpec.upper, upperPlacement, kine, state.frameWidth, true, state.foldProgress));
+    }
+  }
+
+  updateInfoPanel();
+}
+
+// ==========================================
+// 8. UI 交互与规格联动逻辑
+// ==========================================
+function populateCabinSelect() {
+  const select = document.getElementById('cabin-select');
+  const wrap = document.getElementById('cabin-select-wrap');
+  select.innerHTML = '';
+
+  if (state.cabinMode === 'none') {
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+
+  const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
+  list.forEach(item => {
+    const opt = document.createElement('option');
+    const widthText = item.widths.map(w => w === 380 ? '窄380' : (w === 550 ? '中550' : '宽650')).join('/');
+    opt.value = item.id;
+    opt.textContent = `${item.id} | ${item.name} [${widthText}]`;
+    select.appendChild(opt);
+  });
+
+  if (!list.some(i => i.id === state.selectedId)) {
+    state.selectedId = list[0].id;
+  }
+  select.value = state.selectedId;
+}
+
+function setCabinMode(mode) {
+  state.cabinMode = mode;
+  ['single', 'double', 'none'].forEach(m => {
+    document.getElementById(`mode-${m}`).classList.toggle('btn-active', m === mode);
+  });
+  populateCabinSelect();
+  if (mode !== 'none') {
+    onCabinChange(state.selectedId);
+  } else {
+    updateScene();
+  }
+}
+
+function onCabinChange(id) {
+  state.selectedId = id;
+  const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
+  const item = list.find(x => x.id === id);
+
+  // 若当前车架宽度不在该座舱支持列表内，自动切换到该座舱主用宽度
+  if (item && !item.widths.includes(state.frameWidth)) {
+    setFrameWidth(item.widths[0], true);
+  }
+
+  // 检查是否显示货舱桌板开关 (仅 S13 / S14 单舱支持挂载 A01 / A02 桌板，双舱干涉拆下)
+  const trayDiv = document.getElementById('tray-option');
+  const trayLabel = document.getElementById('tray-label');
+  if (state.cabinMode === 'single' && (id === 'S13' || id === 'S14')) {
+    trayDiv.classList.remove('hidden');
+    trayLabel.textContent = id === 'S13' ? '附件：挂载中型桌板 A01' : '附件：挂载大型桌板 A02';
+  } else {
+    trayDiv.classList.add('hidden');
+    document.getElementById('tray-toggle').checked = false;
+  }
+
+  updateWidthButtonsAvailability();
+  updateScene();
+}
+
+function updateWidthButtonsAvailability() {
+  const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
+  const item = state.cabinMode === 'none' ? null : list.find(x => x.id === state.selectedId);
+
+  [380, 550, 650].forEach(w => {
+    const btn = document.getElementById(`width-${w}`);
+    const supported = !item || item.widths.includes(w);
+    btn.classList.toggle('btn-active', state.frameWidth === w);
+    btn.classList.toggle('opacity-40', !supported);
+  });
+
+  const hint = document.getElementById('width-compat-hint');
+  if (!item || item.widths.includes(state.frameWidth)) {
+    hint.textContent = '✓ 符合设计目标宽度';
+    hint.className = 'text-[11px] text-emerald-400';
+  } else {
+    hint.textContent = `⚠ 该配置仅支持 ${item.widths.join('/')} mm`;
+    hint.className = 'text-[11px] text-amber-400';
+  }
+}
+
+function setFrameWidth(w, skipSceneUpdate = false) {
+  state.frameWidth = w;
+  updateWidthButtonsAvailability();
+  if (!skipSceneUpdate) updateScene();
+}
+
+function setWheelSize(size) {
+  state.wheelSize = size;
+  ['S', 'M', 'L'].forEach(s => {
+    document.getElementById(`wheel-${s}`).classList.toggle('btn-active', s === size);
+  });
+  updateScene();
+}
+
+function setFoldProgress(val) {
+  state.foldProgress = val;
+  document.getElementById('fold-slider').value = val;
+
+  const pct = Math.round(val * 100);
+  const label = document.getElementById('fold-pct-label');
+  if (pct === 0) label.textContent = '0% (完全展开)';
+  else if (pct === 100) label.textContent = '100% (折叠后独自站立)';
+  else label.textContent = `${pct}% (折叠收拢中)`;
+
+  document.getElementById('fold-0').classList.toggle('btn-active', pct === 0);
+  document.getElementById('fold-50').classList.toggle('btn-active', pct > 0 && pct < 100);
+  document.getElementById('fold-100').classList.toggle('btn-active', pct === 100);
+
+  const notice = document.getElementById('fold-notice');
+  if (val > 0.05 && state.cabinMode !== 'none' && state.selectedId !== 'S15') {
+    notice.classList.remove('hidden');
+  } else {
+    notice.classList.add('hidden');
+  }
+
+  updateScene();
+}
+
+function updateInfoPanel() {
+  const wheelSpec = WHEEL_SPECS[state.wheelSize];
+  const widthName = state.frameWidth === 380 ? '窄档' : (state.frameWidth === 550 ? '中档' : '宽档');
+  document.getElementById('spec-frame-width').textContent = `${state.frameWidth} mm (${widthName})`;
+
+  // 含轮整车外宽 = 车架外宽 + 两侧后轮外凸宽度
+  const totalW = state.wheelsAttached
+    ? state.frameWidth + (wheelSpec.rearWidth + 12) * 2
+    : state.frameWidth;
+  document.getElementById('spec-total-width').textContent = state.wheelsAttached
+    ? `${totalW} mm (配${wheelSpec.name})`
+    : `${totalW} mm (已拆轮)`;
+
+  if (state.cabinMode === 'none') {
+    document.getElementById('spec-code').textContent = 'FRAME';
+    document.getElementById('spec-ports').textContent = '空载 (未挂载座舱)';
+    document.getElementById('spec-children').textContent = '0 人';
+    document.getElementById('spec-title').textContent = '主车架空载状态';
+    document.getElementById('spec-desc').textContent = '主车架由主梁、副梁共面组成；主梁中心设折叠铰链，折叠后把手位于后轮后侧触地，与两后轮实现独自站立。';
+    return;
+  }
+
+  if (state.cabinMode === 'single') {
+    const s = SINGLE_CABINS.find(x => x.id === state.selectedId);
+    document.getElementById('spec-code').textContent = s.id;
+    document.getElementById('spec-ports').textContent = s.portLabel;
+    document.getElementById('spec-children').textContent = `${s.children} 人`;
+    document.getElementById('spec-title').textContent = `${s.id} ${s.name}`;
+    document.getElementById('spec-desc').textContent = s.desc;
+  } else {
+    const d = DOUBLE_CABINS.find(x => x.id === state.selectedId);
+    document.getElementById('spec-code').textContent = d.id;
+    document.getElementById('spec-ports').textContent = `${d.portLabel} 接口`;
+    document.getElementById('spec-children').textContent = `${d.children} 人`;
+    document.getElementById('spec-title').textContent = `${d.id} ${d.name}`;
+    let extraNote = `下方模块 [${d.lower}] ＋ 上方模块 [${d.upper}]。`;
+    if (d.lower === 'S11' || d.lower === 'S12') {
+      extraNote += ' 露营舱参与双舱时后排拆座/停用，下方仅前排乘坐。';
+    }
+    if (['S03', 'S04'].includes(d.lower)) {
+      extraNote += ' 下方宠物舱采用低顶/可拆顶棚状态，不抬高上方儿童模块。';
+    }
+    document.getElementById('spec-desc').textContent = extraNote;
+  }
+}
+
+function setCameraView(view) {
+  if (view === 'iso') camera.position.set(1450, 950, 1550);
+  if (view === 'side') camera.position.set(1900, 480, 0);
+  if (view === 'front') camera.position.set(0, 520, 1950);
+  if (view === 'top') camera.position.set(0, 2200, 10);
+  controls.target.set(0, 420, 0);
+  controls.update();
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// 初始化启动
+populateCabinSelect();
+onCabinChange('S05');
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
