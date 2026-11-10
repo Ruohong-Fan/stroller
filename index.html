@@ -8,14 +8,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Three.js 核心与 GLTF 加载器 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <!-- OpenCascade WebAssembly 内核：用于直接解析 GitHub 仓库中的 .step / .stp 文件 -->
+  <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.22/dist/occt-import-js.js"></script>
   <style>
     :root {
       --bg-studio: #F5F4F0;
       --ink-primary: #18181B;
       --ink-secondary: #71717A;
-      --accent-bronze: #A67C52;
     }
     body {
       margin: 0;
@@ -25,32 +28,21 @@
       font-family: 'Plus Jakarta Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
-    .font-mono-num {
-      font-family: 'JetBrains Mono', monospace;
-    }
-    /* 隐藏式优雅滚动条 */
+    .font-mono-num { font-family: 'JetBrains Mono', monospace; }
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(24, 24, 27, 0.15); border-radius: 9999px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(24, 24, 27, 0.3); }
 
-    /* 高端磨砂云石面板 */
     .studio-panel {
-      background: rgba(255, 255, 255, 0.82);
+      background: rgba(255, 255, 255, 0.84);
       backdrop-filter: blur(24px) saturate(180%);
       -webkit-backdrop-filter: blur(24px) saturate(180%);
       border: 1px solid rgba(24, 24, 27, 0.07);
       box-shadow: 0 20px 50px -12px rgba(24, 24, 27, 0.06), 0 4px 16px -4px rgba(24, 24, 27, 0.03);
     }
 
-    /* 胶囊分段按钮选中态 */
-    .seg-btn {
-      color: #71717A;
-      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .seg-btn:hover {
-      color: #18181B;
-    }
+    .seg-btn { color: #71717A; transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+    .seg-btn:hover { color: #18181B; }
     .seg-active {
       background-color: #FFFFFF !important;
       color: #18181B !important;
@@ -58,17 +50,13 @@
       box-shadow: 0 2px 8px rgba(24, 24, 27, 0.08), 0 1px 2px rgba(24, 24, 27, 0.04);
     }
 
-    /* 规格卡片选中态 */
     .card-btn {
       background: #FFFFFF;
       border: 1px solid #E4E4E7;
       color: #52525B;
       transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .card-btn:hover:not(.opacity-35) {
-      border-color: #A1A1AA;
-      color: #18181B;
-    }
+    .card-btn:hover:not(.opacity-35) { border-color: #A1A1AA; color: #18181B; }
     .card-active {
       background: #18181B !important;
       border-color: #18181B !important;
@@ -76,7 +64,6 @@
       box-shadow: 0 8px 20px -4px rgba(24, 24, 27, 0.22);
     }
 
-    /* 高定极细滑块 */
     input[type=range].studio-slider {
       -webkit-appearance: none;
       appearance: none;
@@ -98,11 +85,8 @@
       cursor: pointer;
       transition: transform 0.15s ease;
     }
-    input[type=range].studio-slider::-webkit-slider-thumb:hover {
-      transform: scale(1.12);
-    }
+    input[type=range].studio-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
 
-    /* 自定义下拉框箭头 */
     .studio-select {
       appearance: none;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2352525B' stroke-width='1.8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
@@ -114,12 +98,17 @@
 </head>
 <body class="select-none">
 
-<!-- 顶部极简品牌导航栏 -->
-<header class="fixed top-6 left-1/2 -translate-x-1/2 z-10 pointer-events-none hidden md:flex items-center gap-4 studio-panel px-5 py-2.5 rounded-full">
+<!-- 顶部品牌与仓库模型同步状态栏 -->
+<header class="fixed top-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3.5 studio-panel px-5 py-2.5 rounded-full">
   <span class="text-xs font-bold tracking-[0.22em] text-zinc-900 uppercase">AERO·MOD</span>
   <span class="w-px h-3 bg-zinc-300"></span>
-  <span class="text-[11px] font-medium tracking-wider text-zinc-500">Modular Stroller Architecture</span>
-  <span class="text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-zinc-900/5 text-zinc-600">1:1 CAD Scale</span>
+  <div class="flex items-center gap-2">
+    <span id="cad-status-dot" class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+    <span id="cad-status-text" class="text-[11px] font-medium text-zinc-600">正在同步 GitHub 模型仓库 (/models/)...</span>
+  </div>
+  <button onclick="forceReloadModels()" title="强制拉取 GitHub 最新上传的模型文件" class="text-[11px] font-mono-num px-2.5 py-0.5 rounded-full bg-zinc-900/5 hover:bg-zinc-900/10 text-zinc-700 transition cursor-pointer">
+    ↻ 刷新模型
+  </button>
 </header>
 
 <!-- 3D 渲染画布容器 -->
@@ -127,11 +116,10 @@
 
 <!-- 左侧高定配置面板 -->
 <aside class="fixed top-5 left-5 bottom-5 w-[380px] studio-panel rounded-[28px] p-6 flex flex-col gap-5 overflow-y-auto z-10">
-  <!-- 标题区 -->
   <div class="pb-3 border-b border-zinc-200/80">
     <div class="flex items-center justify-between">
-      <span class="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-700/90">Bespoke Configurator</span>
-      <span class="text-[11px] font-mono-num text-zinc-400">15 Single · 35 Dual</span>
+      <span class="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-700/90">CAD Asset Pipeline</span>
+      <span class="text-[11px] font-mono-num text-zinc-400">STEP / GLB Native</span>
     </div>
     <h1 class="text-xl font-semibold tracking-tight text-zinc-900 mt-1">模块化推车定制系统</h1>
   </div>
@@ -140,22 +128,21 @@
   <section class="space-y-2.5">
     <div class="flex items-center justify-between">
       <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">01 · Configuration Mode</label>
-      <span class="text-[11px] text-zinc-500">座舱形态</span>
+      <span id="asset-source-badge" class="text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">自动匹配源</span>
     </div>
 
     <!-- 胶囊分段选择器 -->
-    <div class="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-zinc-100/90 border border-zinc-200/60">
-      <button id="mode-single" onclick="setCabinMode('single')" class="seg-btn py-2 px-2 text-xs rounded-xl seg-active">单舱 (15)</button>
-      <button id="mode-double" onclick="setCabinMode('double')" class="seg-btn py-2 px-2 text-xs rounded-xl">双舱 (35)</button>
-      <button id="mode-none" onclick="setCabinMode('none')" class="seg-btn py-2 px-2 text-xs rounded-xl">纯车架</button>
+    <div class="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-zinc-100/90 border border-zinc-200/60">
+      <button id="mode-single" onclick="setCabinMode('single')" class="seg-btn py-2 px-1 text-xs rounded-xl seg-active">单舱(15)</button>
+      <button id="mode-double" onclick="setCabinMode('double')" class="seg-btn py-2 px-1 text-xs rounded-xl">双舱(35)</button>
+      <button id="mode-none" onclick="setCabinMode('none')" class="seg-btn py-2 px-1 text-xs rounded-xl">纯车架</button>
+      <button id="mode-fullcad" onclick="setCabinMode('fullcad')" class="seg-btn py-2 px-1 text-xs rounded-xl" title="直接展示 models/full/stroller.step 整车总装文件">整车CAD</button>
     </div>
 
-    <!-- 下拉选择器 -->
     <div id="cabin-select-wrap" class="pt-0.5">
       <select id="cabin-select" onchange="onCabinChange(this.value)" class="studio-select w-full bg-white border border-zinc-200 hover:border-zinc-400 rounded-2xl px-3.5 py-2.5 text-xs font-medium text-zinc-800 shadow-sm focus:outline-none focus:border-zinc-900 transition cursor-pointer"></select>
     </div>
 
-    <!-- 货舱桌板附件开关 -->
     <label id="tray-option" class="hidden items-center justify-between bg-amber-50/70 px-3.5 py-2.5 rounded-2xl border border-amber-200/70 cursor-pointer transition">
       <div class="flex items-center gap-2">
         <span class="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
@@ -287,7 +274,6 @@
     <span id="spec-code" class="text-xs font-mono-num font-semibold bg-zinc-900 text-white px-3 py-1 rounded-full">S05</span>
   </div>
 
-  <!-- 核心指标四宫格 -->
   <div class="grid grid-cols-2 gap-2.5">
     <div class="bg-white/90 p-3 rounded-2xl border border-zinc-200/70">
       <div class="text-[10px] uppercase tracking-wider text-zinc-400">Frame Width</div>
@@ -307,12 +293,13 @@
     </div>
   </div>
 
-  <!-- 工程说明 -->
-  <div class="bg-zinc-900/[0.03] p-3.5 rounded-2xl border border-zinc-900/[0.06]">
+  <div class="bg-zinc-900/[0.03] p-3.5 rounded-2xl border border-zinc-900/[0.06] space-y-2">
     <div class="text-[11px] text-zinc-600 leading-relaxed" id="spec-desc"></div>
+    <div id="spec-cad-path" class="text-[10px] font-mono-num text-zinc-400 pt-1 border-t border-zinc-200/60">
+      目标模型路径: models/cabins/S05.(glb|step)
+    </div>
   </div>
 
-  <!-- 极简色标图例 -->
   <div class="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-500">
     <span class="flex items-center gap-1.5"><i class="w-2 h-2 rounded-full bg-[#C85A53] inline-block"></i>高位</span>
     <span class="flex items-center gap-1.5"><i class="w-2 h-2 rounded-full bg-[#C89B53] inline-block"></i>中位</span>
@@ -332,9 +319,64 @@
 </div>
 
 <script>
-// ==========================================
+// ============================================================================
+// 0. GitHub 模型仓库配置文件 (MODEL_MANIFEST)
+// ----------------------------------------------------------------------------
+// 目录规范：
+// - 单舱 (15种): models/cabins/S01.step ~ S15.step (或 .glb)
+// - 双舱 (35种): models/doubles/D01.step ~ D35.step (或放在 models/cabins/D01.step)
+// - 整车总装:    models/full/stroller.step (或 .glb)
+// ============================================================================
+const MODEL_MANIFEST = {
+  baseUrl: './models', // 对应 https://ruohong-fan.github.io/stroller/models/
+  extensions: ['.glb', '.step', '.stp', '.gltf'], // 自动探测优先级
+
+  // 全局 CAD 坐标系修正（大多数 CAD 软件如 SolidWorks/Shapr3D 默认 Z 轴向上，Three.js 默认 Y 轴向上）
+  cadUpAxis: 'Z_UP',   // 'Z_UP' (自动绕 X 轴旋转 -90° 扶正) | 'Y_UP' (不旋转)
+  unitScale: 1.0,      // STEP 默认单位通常为毫米(mm)，与本场景 1:1 对应；若模型偏小1000倍可改为 1000
+
+  // (A) 整车总装单文件模式路径（上传 models/full/stroller.step 时可一键预览整车）
+  fullAssembly: {
+    path: 'full/stroller',
+    offset: [0, 0, 0]
+  },
+
+  // (B) 车轮模块路径映射
+  wheels: {
+    S: { path: 'wheels/wheel_S', offset: [0, 0, 0] },
+    M: { path: 'wheels/wheel_M', offset: [0, 0, 0] },
+    L: { path: 'wheels/wheel_L', offset: [0, 0, 0] }
+  },
+
+  // (C) 15种单舱模块路径映射 (models/cabins/S01 ~ S15)
+  cabins: {
+    S01: { path: 'cabins/S01', offset: [0, 0, 0] },
+    S02: { path: 'cabins/S02', offset: [0, 0, 0] },
+    S03: { path: 'cabins/S03', offset: [0, 0, 0] },
+    S04: { path: 'cabins/S04', offset: [0, 0, 0] },
+    S05: { path: 'cabins/S05', offset: [0, 0, 0] },
+    S06: { path: 'cabins/S06', offset: [0, 0, 0] },
+    S07: { path: 'cabins/S07', offset: [0, 0, 0] },
+    S08: { path: 'cabins/S08', offset: [0, 0, 0] },
+    S09: { path: 'cabins/S09', offset: [0, 0, 0] },
+    S10: { path: 'cabins/S10', offset: [0, 0, 0] },
+    S11: { path: 'cabins/S11', offset: [0, 0, 0] },
+    S12: { path: 'cabins/S12', offset: [0, 0, 0] },
+    S13: { path: 'cabins/S13', offset: [0, 0, 0] },
+    S14: { path: 'cabins/S14', offset: [0, 0, 0] },
+    S15: { path: 'cabins/S15', offset: [0, 0, 0] }
+  },
+
+  // (D) 35种双舱独立建模文件路径（优先找 models/doubles/D01，找不到再找 models/cabins/D01）
+  doubles: {
+    folders: ['doubles', 'cabins'],
+    offset: [0, 0, 0]
+  }
+};
+
+// ============================================================================
 // 1. 完整工程数据库 (严格对应 stroller-design 文档)
-// ==========================================
+// ============================================================================
 const WHEEL_SPECS = {
   S: { name: '小轮组', frontDia: 150, frontWidth: 25, rearDia: 200, rearWidth: 30 },
   M: { name: '中轮组', frontDia: 220, frontWidth: 35, rearDia: 300, rearWidth: 45 },
@@ -342,21 +384,21 @@ const WHEEL_SPECS = {
 };
 
 const SINGLE_CABINS = [
-  { id: 'S01', name: '儿童轻便布兜', widths: [380], ports: ['HIGH', 'MID'], portLabel: '高＋中 · 软侧固定', children: 1, type: 'sling', desc: '窄档 380 专用，连接高、中两组接口，通过软性侧边固定，适合轻便旅行场景。' },
-  { id: 'S02', name: '小宠舱', widths: [380], ports: ['MID'], portLabel: '中位接口', children: 0, type: 'pet_s', desc: '窄档 380 专用独立小宠座舱，默认安装于中位接口。' },
-  { id: 'S03', name: '中宠舱', widths: [550], ports: ['MID'], portLabel: '中位接口', children: 0, type: 'pet_m', desc: '中档 550 专用，服务一只中大型犬或多只中小宠物。' },
-  { id: 'S04', name: '大宠舱', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 0, type: 'pet_l', desc: '宽档 650 专用，目标容量为两只中大型犬或一只超大型犬。' },
-  { id: 'S05', name: '单儿童坐席', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 1, type: 'seat_1', desc: '主用模式为中档 550；宽档 650 模式下自动匹配短加宽转接件。' },
-  { id: 'S06', name: '婴儿睡篮', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 1, type: 'bassinet', desc: '平躺式高定婴儿睡篮，中档 550 为主，宽档 650 使用短加宽转接件。' },
-  { id: 'S07', name: '婴儿提篮', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 1, type: 'carrier', desc: '车载/推车两用婴儿提篮，中档 550 为主，宽档 650 配短加宽转接件。' },
-  { id: 'S08', name: '中型成人座舱', widths: [550], ports: ['HIGH', 'MID', 'LOW'], portLabel: '高＋中 · 脚踏低位', children: 0, type: 'adult_m', desc: '中档 550 专用，面向体重较轻成人；保留两侧扶手、坐垫与靠背，不设前横杆，脚踏接低位。' },
-  { id: 'S09', name: '大型成人座舱', widths: [650], ports: ['HIGH', 'MID', 'LOW'], portLabel: '高＋中 · 脚踏低位', children: 0, type: 'adult_l', desc: '宽档 650 专用，面向中等体重成人；连接高、中接口，独立脚踏连接低位接口。' },
-  { id: 'S10', name: '双胞胎并排坐席', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 2, type: 'twin_seat', desc: '宽档 650 专用，作为一个独立安装模块提供左右并排两个儿童乘坐位。' },
-  { id: 'S11', name: '两座儿童露营舱', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 2, type: 'camp_2', desc: '单独使用时前后各一座（共2人），支持中档 550 与宽档 650；支承脚随舱快拆。' },
-  { id: 'S12', name: '四座儿童露营舱', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 4, type: 'camp_4', desc: '宽档 650 专用，单独使用时前后各两座（共4人）；承重支承脚随舱拆走。' },
-  { id: 'S13', name: '中型载货舱', widths: [550], ports: ['MID'], portLabel: '中位接口', children: 0, type: 'cargo_m', tray: 'A01', desc: '中档 550 专用，顶部框架可匹配中型桌板附件 A01。' },
-  { id: 'S14', name: '大型载货舱', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 0, type: 'cargo_l', tray: 'A02', desc: '宽档 650 专用，顶部框架可匹配大型桌板附件 A02。' },
-  { id: 'S15', name: '小型软载货舱', widths: [380], ports: ['LOW'], portLabel: '低位 · 窄档专用', children: 0, type: 'soft_cargo', desc: '窄档 380 独立快拆模块，软布兜+承重织带+短支承片；空袋支持随车折叠。' }
+  { id: 'S01', name: '儿童轻便布兜', widths: [380], ports: ['HIGH', 'MID'], portLabel: '高＋中 · 软侧固定', children: 1, desc: '窄档 380 专用，连接高、中两组接口，通过软性侧边固定，适合轻便旅行场景。' },
+  { id: 'S02', name: '小宠舱', widths: [380], ports: ['MID'], portLabel: '中位接口', children: 0, desc: '窄档 380 专用独立小宠座舱，默认安装于中位接口。' },
+  { id: 'S03', name: '中宠舱', widths: [550], ports: ['MID'], portLabel: '中位接口', children: 0, desc: '中档 550 专用，服务一只中大型犬或多只中小宠物。' },
+  { id: 'S04', name: '大宠舱', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 0, desc: '宽档 650 专用，目标容量为两只中大型犬或一只超大型犬。' },
+  { id: 'S05', name: '单儿童坐席', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 1, desc: '主用模式为中档 550；宽档 650 模式下自动匹配短加宽转接件。' },
+  { id: 'S06', name: '婴儿睡篮', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 1, desc: '平躺式高定婴儿睡篮，中档 550 为主，宽档 650 使用短加宽转接件。' },
+  { id: 'S07', name: '婴儿提篮', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 1, desc: '车载/推车两用婴儿提篮，中档 550 为主，宽档 650 配短加宽转接件。' },
+  { id: 'S08', name: '中型成人座舱', widths: [550], ports: ['HIGH', 'MID', 'LOW'], portLabel: '高＋中 · 脚踏低位', children: 0, desc: '中档 550 专用，面向体重较轻成人；保留两侧扶手、坐垫与靠背，不设前横杆，脚踏接低位。' },
+  { id: 'S09', name: '大型成人座舱', widths: [650], ports: ['HIGH', 'MID', 'LOW'], portLabel: '高＋中 · 脚踏低位', children: 0, desc: '宽档 650 专用，面向中等体重成人；连接高、中接口，独立脚踏连接低位接口。' },
+  { id: 'S10', name: '双胞胎并排坐席', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 2, desc: '宽档 650 专用，作为一个独立安装模块提供左右并排两个儿童乘坐位。' },
+  { id: 'S11', name: '两座儿童露营舱', widths: [550, 650], ports: ['MID'], portLabel: '中位接口', children: 2, desc: '单独使用时前后各一座（共2人），支持中档 550 与宽档 650；支承脚随舱快拆。' },
+  { id: 'S12', name: '四座儿童露营舱', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 4, desc: '宽档 650 专用，单独使用时前后各两座（共4人）；承重支承脚随舱拆走。' },
+  { id: 'S13', name: '中型载货舱', widths: [550], ports: ['MID'], portLabel: '中位接口', children: 0, tray: 'A01', desc: '中档 550 专用，顶部框架可匹配中型桌板附件 A01。' },
+  { id: 'S14', name: '大型载货舱', widths: [650], ports: ['MID'], portLabel: '中位接口', children: 0, tray: 'A02', desc: '宽档 650 专用，顶部框架可匹配大型桌板附件 A02。' },
+  { id: 'S15', name: '小型软载货舱', widths: [380], ports: ['LOW'], portLabel: '低位 · 窄档专用', children: 0, desc: '窄档 380 独立快拆模块，软布兜+承重织带+短支承片；空袋支持随车折叠。' }
 ];
 
 const DOUBLE_CABINS = [
@@ -397,11 +439,11 @@ const DOUBLE_CABINS = [
   { id: 'D35', name: '小型软载货舱 ＋ 小宠舱', lower: 'S15', upper: 'S02', widths: [380], ports: ['LOW', 'MID'], portLabel: '低 ＋ 中', children: 0 }
 ];
 
-// ==========================================
-// 2. 状态管理
-// ==========================================
+// ============================================================================
+// 2. 状态管理与 CAD 缓存池
+// ============================================================================
 const state = {
-  cabinMode: 'single',
+  cabinMode: 'single', // 'single' | 'double' | 'none' | 'fullcad'
   selectedId: 'S05',
   frameWidth: 550,
   wheelSize: 'M',
@@ -409,12 +451,169 @@ const state = {
   wheelsAttached: true,
   barsAttached: true,
   showPorts: true,
-  showTray: false
+  showTray: false,
+  cacheBust: Date.now()
 };
 
-// ==========================================
-// 3. Three.js 摄影棚级场景初始化 (1单位 = 1mm)
-// ==========================================
+// 缓存已加载的真实 CAD 模型: key -> { status: 'loaded' | 'missing' | 'loading', group: THREE.Group, ext: string, foundPath: string }
+const cadAssetCache = new Map();
+let occtInstancePromise = null;
+const gltfLoader = new THREE.GLTFLoader();
+
+function getOcctEngine() {
+  if (!occtInstancePromise) {
+    occtInstancePromise = occtimportjs({
+      locateFile: (name) => `https://cdn.jsdelivr.net/npm/occt-import-js@0.0.22/dist/${name}`
+    });
+  }
+  return occtInstancePromise;
+}
+
+// 探测并加载指定候选路径列表下的 .glb 或 .step 模型
+async function loadCadAsset(logicalKey, relativePathsWithoutExt) {
+  const pathList = Array.isArray(relativePathsWithoutExt) ? relativePathsWithoutExt : [relativePathsWithoutExt];
+
+  if (cadAssetCache.has(logicalKey)) {
+    const cached = cadAssetCache.get(logicalKey);
+    if (cached.status === 'loaded') return cached.group.clone();
+    if (cached.status === 'missing') return null;
+  }
+
+  cadAssetCache.set(logicalKey, { status: 'loading', group: null });
+  updateHeaderStatus();
+
+  for (const relPath of pathList) {
+    for (const ext of MODEL_MANIFEST.extensions) {
+      const url = `${MODEL_MANIFEST.baseUrl}/${relPath}${ext}?v=${state.cacheBust}`;
+      try {
+        const headRes = await fetch(url, { method: 'HEAD' });
+        if (!headRes.ok) continue;
+
+        let loadedGroup = null;
+        if (ext === '.glb' || ext === '.gltf') {
+          loadedGroup = await new Promise((resolve, reject) => {
+            gltfLoader.load(url, (gltf) => resolve(gltf.scene), undefined, reject);
+          });
+        } else if (ext === '.step' || ext === '.stp') {
+          const res = await fetch(url);
+          const buffer = new Uint8Array(await res.arrayBuffer());
+          const occt = await getOcctEngine();
+          const result = occt.ReadStepFile(buffer, null);
+          loadedGroup = buildThreeGroupFromOcctResult(result);
+        }
+
+        if (loadedGroup) {
+          normalizeCadGroup(loadedGroup);
+          cadAssetCache.set(logicalKey, {
+            status: 'loaded',
+            group: loadedGroup,
+            ext,
+            foundPath: `models/${relPath}${ext}`
+          });
+          updateHeaderStatus();
+          return loadedGroup.clone();
+        }
+      } catch (e) {
+        // 当前后缀不存在或解析失败，继续尝试下一个候选
+      }
+    }
+  }
+
+  cadAssetCache.set(logicalKey, { status: 'missing', group: null });
+  updateHeaderStatus();
+  return null;
+}
+
+function buildThreeGroupFromOcctResult(result) {
+  const group = new THREE.Group();
+  if (!result || !result.meshes) return group;
+
+  for (const meshData of result.meshes) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+    if (meshData.attributes.normal) {
+      geom.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+    } else {
+      geom.computeVertexNormals();
+    }
+    if (meshData.index) {
+      geom.setIndex(Array.from(meshData.index.array));
+    }
+
+    let colorHex = 0x3A4F63;
+    if (meshData.color && meshData.color.length === 3) {
+      colorHex = new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2]).getHex();
+    }
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: colorHex,
+      roughness: 0.45,
+      metalness: 0.25
+    });
+
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  return group;
+}
+
+function normalizeCadGroup(group) {
+  if (MODEL_MANIFEST.cadUpAxis === 'Z_UP') {
+    group.rotation.x = -Math.PI / 2;
+  }
+  group.scale.setScalar(MODEL_MANIFEST.unitScale);
+  group.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(group);
+  if (!box.isEmpty()) {
+    const center = box.getCenter(new THREE.Vector3());
+    group.position.x -= center.x;
+    group.position.z -= center.z;
+    group.position.y -= box.min.y;
+  }
+
+  group.traverse(child => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+}
+
+function updateHeaderStatus() {
+  const dot = document.getElementById('cad-status-dot');
+  const text = document.getElementById('cad-status-text');
+  let loadedCount = 0;
+  let loadingCount = 0;
+
+  cadAssetCache.forEach(val => {
+    if (val.status === 'loaded') loadedCount++;
+    if (val.status === 'loading') loadingCount++;
+  });
+
+  if (loadingCount > 0) {
+    dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-ping';
+    text.textContent = '正在加载并解析 GitHub CAD 模型...';
+  } else if (loadedCount > 0) {
+    dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
+    text.textContent = `已加载 ${loadedCount} 个 GitHub 真实 CAD 模型`;
+  } else {
+    dot.className = 'w-2 h-2 rounded-full bg-zinc-400';
+    text.textContent = '1:1 参数化预览中 (上传至 /models/ 自动替换)';
+  }
+}
+
+function forceReloadModels() {
+  cadAssetCache.clear();
+  state.cacheBust = Date.now();
+  updateScene();
+}
+
+// ============================================================================
+// 3. Three.js 摄影棚级场景初始化
+// ============================================================================
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xF5F4F0);
@@ -440,7 +639,6 @@ controls.maxPolarAngle = Math.PI / 2 + 0.04;
 controls.minDistance = 500;
 controls.maxDistance = 4200;
 
-// 摄影棚三点布光系统
 const hemiLight = new THREE.HemisphereLight(0xFFFFFF, 0xE6E2DD, 0.85);
 scene.add(hemiLight);
 
@@ -449,8 +647,6 @@ keyLight.position.set(1400, 2400, 1600);
 keyLight.castShadow = true;
 keyLight.shadow.mapSize.width = 2048;
 keyLight.shadow.mapSize.height = 2048;
-keyLight.shadow.camera.near = 200;
-keyLight.shadow.camera.far = 5000;
 const d = 1100;
 keyLight.shadow.camera.left = -d;
 keyLight.shadow.camera.right = d;
@@ -463,7 +659,6 @@ const fillLight = new THREE.DirectionalLight(0xEBF0F5, 0.45);
 fillLight.position.set(-1500, 1000, -1100);
 scene.add(fillLight);
 
-// 摄影棚无感阴影承接地面 + 极简圆形标尺环
 const shadowPlane = new THREE.Mesh(
   new THREE.PlaneGeometry(8000, 8000),
   new THREE.ShadowMaterial({ opacity: 0.12 })
@@ -472,7 +667,6 @@ shadowPlane.rotation.x = -Math.PI / 2;
 shadowPlane.receiveShadow = true;
 scene.add(shadowPlane);
 
-// 极淡的建筑感地面标尺圆环
 const ringGeom = new THREE.RingGeometry(580, 583, 96);
 ringGeom.rotateX(-Math.PI / 2);
 const ringMesh = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: 0xD6D3CD, side: THREE.DoubleSide }));
@@ -482,23 +676,20 @@ scene.add(ringMesh);
 const strollerRoot = new THREE.Group();
 scene.add(strollerRoot);
 
-// ==========================================
-// 高定工业设计材质库 (Anodized & Morandi Palette)
-// ==========================================
 const MATS = {
-  mainFrame: new THREE.MeshStandardMaterial({ color: 0x27272A, metalness: 0.65, roughness: 0.28 }),     // 阳极氧化深枪灰主梁
-  subFrame: new THREE.MeshStandardMaterial({ color: 0x71717A, metalness: 0.55, roughness: 0.32 }),      // 钛灰副梁
-  joint: new THREE.MeshStandardMaterial({ color: 0x18181B, metalness: 0.3, roughness: 0.45 }),          // 精密工程塑胶关节
-  detachBar: new THREE.MeshStandardMaterial({ color: 0x8C9BAE, metalness: 0.5, roughness: 0.28 }),      // 冰川银蓝可拆横杠
-  handleGrip: new THREE.MeshStandardMaterial({ color: 0x3F2E21, roughness: 0.75 }),                     // 棕褐色植鞣皮把套
-  tire: new THREE.MeshStandardMaterial({ color: 0x1F1F22, roughness: 0.88 }),                           // 哑光橡胶胎面
-  rim: new THREE.MeshStandardMaterial({ color: 0xE4E4E7, metalness: 0.75, roughness: 0.22 }),           // 铝合金拉丝轮毂
-  spring: new THREE.MeshStandardMaterial({ color: 0xB48E68, metalness: 0.8, roughness: 0.22 }),         // 香槟金避震弹簧
-  brakePedal: new THREE.MeshStandardMaterial({ color: 0xB94A48, roughness: 0.4 }),                      // 朱砂红制动踏板
-  portHigh: new THREE.MeshStandardMaterial({ color: 0xC85A53, roughness: 0.35 }),                       // 高位赤陶红锚点
-  portMid: new THREE.MeshStandardMaterial({ color: 0xC89B53, roughness: 0.35 }),                        // 中位琥珀金锚点
-  portLow: new THREE.MeshStandardMaterial({ color: 0x4F8A6B, roughness: 0.35 }),                        // 低位鼠尾草绿锚点
-  adapter: new THREE.MeshStandardMaterial({ color: 0x8B7355, metalness: 0.45, roughness: 0.35 })        // 古铜色加宽转接臂
+  mainFrame: new THREE.MeshStandardMaterial({ color: 0x27272A, metalness: 0.65, roughness: 0.28 }),
+  subFrame: new THREE.MeshStandardMaterial({ color: 0x71717A, metalness: 0.55, roughness: 0.32 }),
+  joint: new THREE.MeshStandardMaterial({ color: 0x18181B, metalness: 0.3, roughness: 0.45 }),
+  detachBar: new THREE.MeshStandardMaterial({ color: 0x8C9BAE, metalness: 0.5, roughness: 0.28 }),
+  handleGrip: new THREE.MeshStandardMaterial({ color: 0x3F2E21, roughness: 0.75 }),
+  tire: new THREE.MeshStandardMaterial({ color: 0x1F1F22, roughness: 0.88 }),
+  rim: new THREE.MeshStandardMaterial({ color: 0xE4E4E7, metalness: 0.75, roughness: 0.22 }),
+  spring: new THREE.MeshStandardMaterial({ color: 0xB48E68, metalness: 0.8, roughness: 0.22 }),
+  brakePedal: new THREE.MeshStandardMaterial({ color: 0xB94A48, roughness: 0.4 }),
+  portHigh: new THREE.MeshStandardMaterial({ color: 0xC85A53, roughness: 0.35 }),
+  portMid: new THREE.MeshStandardMaterial({ color: 0xC89B53, roughness: 0.35 }),
+  portLow: new THREE.MeshStandardMaterial({ color: 0x4F8A6B, roughness: 0.35 }),
+  adapter: new THREE.MeshStandardMaterial({ color: 0x8B7355, metalness: 0.45, roughness: 0.35 })
 };
 
 function createTubeBetween(p1, p2, radius, material) {
@@ -525,95 +716,44 @@ function createBoxBetween(p1, p2, thicknessY, widthX, material) {
   return mesh;
 }
 
-// ==========================================
-// 4. 运动学与几何坐标计算 (支持展开 -> 折叠站立)
-// ==========================================
+// ============================================================================
+// 4. 运动学与几何坐标计算
+// ============================================================================
 function computeKinematics(fold, wheelSpec, wheelsOn) {
   const rRear = wheelsOn ? wheelSpec.rearDia / 2 : 28;
   const rFront = wheelsOn ? wheelSpec.frontDia / 2 : 28;
   const lerp = THREE.MathUtils.lerp;
 
   const rearWheelCenter = new THREE.Vector3(0, rRear, -260);
-  const frontWheelCenter = new THREE.Vector3(
-    0,
-    lerp(rFront, rRear + 15, fold),
-    lerp(340, -55, fold)
-  );
-
-  const frontStrutTop = new THREE.Vector3(
-    0,
-    frontWheelCenter.y + rFront + 65,
-    frontWheelCenter.z - 15
-  );
-
-  const rearStrutTop = new THREE.Vector3(
-    0,
-    rearWheelCenter.y + rRear + 55,
-    rearWheelCenter.z
-  );
-
-  const mainHinge = new THREE.Vector3(
-    0,
-    lerp(560, 620, fold),
-    lerp(40, -195, fold)
-  );
-
-  const mainTop = new THREE.Vector3(
-    0,
-    lerp(860, 300, fold),
-    lerp(-240, -425, fold)
-  );
-
-  const handleTip = new THREE.Vector3(
-    0,
-    lerp(1030, 16, fold),
-    lerp(-355, -475, fold)
-  );
-
+  const frontWheelCenter = new THREE.Vector3(0, lerp(rFront, rRear + 15, fold), lerp(340, -55, fold));
+  const frontStrutTop = new THREE.Vector3(0, frontWheelCenter.y + rFront + 65, frontWheelCenter.z - 15);
+  const rearStrutTop = new THREE.Vector3(0, rearWheelCenter.y + rRear + 55, rearWheelCenter.z);
+  const mainHinge = new THREE.Vector3(0, lerp(560, 620, fold), lerp(40, -195, fold));
+  const mainTop = new THREE.Vector3(0, lerp(860, 300, fold), lerp(-240, -425, fold));
+  const handleTip = new THREE.Vector3(0, lerp(1030, 16, fold), lerp(-355, -475, fold));
   const subRear = rearStrutTop.clone();
-  const subMid = new THREE.Vector3(
-    0,
-    lerp(430, 390, fold),
-    lerp(-140, -245, fold)
-  );
-  const subFront = new THREE.Vector3(
-    0,
-    lerp(430, 490, fold),
-    lerp(205, -135, fold)
-  );
+  const subMid = new THREE.Vector3(0, lerp(430, 390, fold), lerp(-140, -245, fold));
+  const subFront = new THREE.Vector3(0, lerp(430, 490, fold), lerp(205, -135, fold));
 
-  const portHigh = new THREE.Vector3(
-    0,
-    lerp(725, 495, fold),
-    lerp(-105, -310, fold)
-  );
+  const portHigh = new THREE.Vector3(0, lerp(725, 495, fold), lerp(-105, -310, fold));
   const portMid = mainHinge.clone();
-  const portLow = new THREE.Vector3(
-    0,
-    lerp(365, 360, fold),
-    lerp(145, -155, fold)
-  );
+  const portLow = new THREE.Vector3(0, lerp(365, 360, fold), lerp(145, -155, fold));
 
   return {
-    rRear, rFront,
-    rearWheelCenter, frontWheelCenter,
-    frontStrutTop, rearStrutTop,
-    mainHinge, mainTop, handleTip,
-    subRear, subMid, subFront,
-    portHigh, portMid, portLow
+    rRear, rFront, rearWheelCenter, frontWheelCenter, frontStrutTop, rearStrutTop,
+    mainHinge, mainTop, handleTip, subRear, subMid, subFront, portHigh, portMid, portLow
   };
 }
 
-// ==========================================
+// ============================================================================
 // 5. 构建车轮与独立避震模块
-// ==========================================
+// ============================================================================
 function buildWheelAssembly(isFront, sideSign, xSide, kine, wheelSpec, wheelsOn) {
   const group = new THREE.Group();
   const center = isFront ? kine.frontWheelCenter : kine.rearWheelCenter;
   const strutTop = isFront ? kine.frontStrutTop : kine.rearStrutTop;
   const radius = isFront ? wheelSpec.frontDia / 2 : wheelSpec.rearDia / 2;
   const tireW = isFront ? wheelSpec.frontWidth : wheelSpec.rearWidth;
-
   const wheelX = xSide + sideSign * (tireW / 2 + 12);
 
   const pTop = new THREE.Vector3(xSide, strutTop.y, strutTop.z);
@@ -662,25 +802,14 @@ function buildWheelAssembly(isFront, sideSign, xSide, kine, wheelSpec, wheelsOn)
   return group;
 }
 
-// ==========================================
-// 6. 构建 15 种高定配色座舱 3D 模型
-// ==========================================
-function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, foldProgress) {
+// ============================================================================
+// 6. 构建座舱模块 (优先渲染 GitHub 上的真实 STEP/GLB，未上传时回退参数化模型)
+// ============================================================================
+async function buildCabinModelAsync(cabinId, placement, kine, frameWidth, isDoubleMode, foldProgress) {
   const spec = SINGLE_CABINS.find(c => c.id === cabinId);
   if (!spec) return new THREE.Group();
 
   const group = new THREE.Group();
-  const isTransparent = foldProgress > 0.05 && cabinId !== 'S15';
-  const opacityVal = isTransparent ? 0.25 : 1.0;
-
-  const makeMat = (hex, rough = 0.65) => new THREE.MeshStandardMaterial({
-    color: hex,
-    roughness: rough,
-    metalness: 0.05,
-    transparent: isTransparent,
-    opacity: opacityVal
-  });
-
   let anchor = new THREE.Vector3();
   if (placement === 'HIGH') {
     anchor.copy(kine.portHigh).add(new THREE.Vector3(0, 45, 25));
@@ -705,12 +834,40 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
     });
   }
 
-  // 出海品牌高定莫兰迪色板
+  // 1) 尝试从 GitHub /models/cabins/ 加载真实 STEP 或 GLB 模型
+  const manifestCfg = MODEL_MANIFEST.cabins[cabinId];
+  if (manifestCfg) {
+    const cadClone = await loadCadAsset(`cabin_${cabinId}`, manifestCfg.path);
+    if (cadClone) {
+      cadClone.position.set(
+        anchor.x + (manifestCfg.offset[0] || 0),
+        anchor.y + (manifestCfg.offset[1] || 0),
+        anchor.z + (manifestCfg.offset[2] || 0)
+      );
+      if (foldProgress > 0.05 && cabinId !== 'S15') {
+        cadClone.traverse(c => {
+          if (c.isMesh && c.material) {
+            c.material = c.material.clone();
+            c.material.transparent = true;
+            c.material.opacity = 0.25;
+          }
+        });
+      }
+      group.add(cadClone);
+      return group;
+    }
+  }
+
+  // 2) 若 GitHub 对应路径暂未上传文件，自动使用内置 1:1 参数化模型渲染
+  const isTransparent = foldProgress > 0.05 && cabinId !== 'S15';
+  const opacityVal = isTransparent ? 0.25 : 1.0;
+  const makeMat = (hex, rough = 0.65) => new THREE.MeshStandardMaterial({
+    color: hex, roughness: rough, metalness: 0.05, transparent: isTransparent, opacity: opacityVal
+  });
+
   switch (cabinId) {
     case 'S01': {
-      // 儿童轻便布兜：雾霾冰川蓝
-      const pH = kine.portHigh;
-      const pM = kine.portMid;
+      const pH = kine.portHigh, pM = kine.portMid;
       const center = pH.clone().lerp(pM, 0.5).add(new THREE.Vector3(0, -15, 20));
       const slingMat = makeMat(0x6B8E9B, 0.75);
       const back = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 20, 310, 22), slingMat);
@@ -729,27 +886,20 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       });
       break;
     }
-
     case 'S02':
     case 'S03':
     case 'S04': {
-      // 小/中/大宠舱：北欧鼠尾草绿 + 亚麻网罩
       const len = cabinId === 'S02' ? 420 : (cabinId === 'S03' ? 540 : 660);
       const baseH = cabinId === 'S02' ? 210 : 250;
       const bodyMat = makeMat(0x5E7A68, 0.65);
       const meshMat = makeMat(0xD8D4CC, 0.5);
-
       const box = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, baseH, len), bodyMat);
       box.position.set(0, anchor.y + baseH / 2 - 20, anchor.z);
       box.castShadow = true;
       group.add(box);
-
       const isLowerInDouble = isDoubleMode && placement !== 'HIGH';
       if (!isLowerInDouble) {
-        const dome = new THREE.Mesh(
-          new THREE.CylinderGeometry(moduleNativeW / 2, moduleNativeW / 2, len - 20, 24, 1, false, 0, Math.PI),
-          meshMat
-        );
+        const dome = new THREE.Mesh(new THREE.CylinderGeometry(moduleNativeW / 2, moduleNativeW / 2, len - 20, 24, 1, false, 0, Math.PI), meshMat);
         dome.rotation.z = Math.PI / 2;
         dome.rotation.y = Math.PI / 2;
         dome.position.set(0, anchor.y + baseH - 20, anchor.z);
@@ -758,22 +908,18 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       }
       break;
     }
-
     case 'S05': {
-      // 单儿童坐席：经典深海雾蓝 + 燕麦白遮阳篷
       const seatMat = makeMat(0x3A4F63, 0.6);
       const canopyMat = makeMat(0xEAE6DF, 0.55);
       const seatBase = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 35, 250), seatMat);
       seatBase.position.set(0, anchor.y, anchor.z + 20);
       seatBase.castShadow = true;
       group.add(seatBase);
-
       const backrest = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 340, 35), seatMat);
       backrest.position.set(0, anchor.y + 160, anchor.z - 95);
       backrest.rotation.x = -0.18;
       backrest.castShadow = true;
       group.add(backrest);
-
       const canopy = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW + 10, 26, 195), canopyMat);
       canopy.position.set(0, anchor.y + 325, anchor.z - 20);
       canopy.castShadow = true;
@@ -783,9 +929,7 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       group.add(armBar);
       break;
     }
-
     case 'S06': {
-      // 婴儿睡篮：暖羊绒米色 + 象牙白内衬
       const bassinetMat = makeMat(0xC7B9A5, 0.6);
       const innerMat = makeMat(0xFAF8F5, 0.75);
       const body = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 210, 620), bassinetMat);
@@ -801,9 +945,7 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       group.add(hood);
       break;
     }
-
     case 'S07': {
-      // 婴儿提篮：莫兰迪灰粉/赤陶色
       const carrierMat = makeMat(0x9E6B66, 0.58);
       const shell = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 180, 480), carrierMat);
       shell.position.set(0, anchor.y + 55, anchor.z);
@@ -815,25 +957,19 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       group.add(handleArch);
       break;
     }
-
     case 'S08':
     case 'S09': {
-      // 中/大型成人座舱：石墨黑灰高定座舱
       const adultMat = makeMat(0x3F3F46, 0.55);
-      const seatY = kine.portMid.y + 20;
-      const seatZ = kine.portMid.z + 25;
-
+      const seatY = kine.portMid.y + 20, seatZ = kine.portMid.z + 25;
       const cushion = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 55, 360), adultMat);
       cushion.position.set(0, seatY, seatZ);
       cushion.castShadow = true;
       group.add(cushion);
-
       const back = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 440, 50), adultMat);
       back.position.set(0, seatY + 210, seatZ - 165);
       back.rotation.x = -0.15;
       back.castShadow = true;
       group.add(back);
-
       [-1, 1].forEach(s => {
         const arm = new THREE.Mesh(new THREE.BoxGeometry(28, 24, 290), MATS.handleGrip);
         arm.position.set(s * (moduleNativeW / 2 - 14), seatY + 115, seatZ - 15);
@@ -842,7 +978,6 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
         armPost.position.set(s * (moduleNativeW / 2 - 14), seatY + 55, seatZ + 110);
         group.add(armPost);
       });
-
       const footPos = kine.portLow.clone();
       const footplate = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 40, 20, 170), MATS.mainFrame);
       footplate.position.set(0, footPos.y - 60, footPos.z + 110);
@@ -856,14 +991,11 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       });
       break;
     }
-
     case 'S10': {
-      // 双胞胎并排坐席：北欧峡湾蓝
       const twinMat = makeMat(0x486581, 0.58);
       const base = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, 35, 270), MATS.mainFrame);
       base.position.set(0, anchor.y, anchor.z + 15);
       group.add(base);
-
       const singleSeatW = (moduleNativeW - 26) / 2;
       [-1, 1].forEach(s => {
         const xCenter = s * (singleSeatW / 2 + 6);
@@ -871,7 +1003,6 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
         sPad.position.set(xCenter, anchor.y + 25, anchor.z + 20);
         sPad.castShadow = true;
         group.add(sPad);
-
         const sBack = new THREE.Mesh(new THREE.BoxGeometry(singleSeatW, 320, 32), twinMat);
         sBack.position.set(xCenter, anchor.y + 175, anchor.z - 90);
         sBack.rotation.x = -0.15;
@@ -880,28 +1011,22 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       });
       break;
     }
-
     case 'S11':
     case 'S12': {
-      // 两座/四座儿童露营舱：沙漠卡其棕
       const campMat = makeMat(0x9C7A54, 0.68);
-      const boxLen = cabinId === 'S11' ? 660 : 760;
-      const wallH = 230;
+      const boxLen = cabinId === 'S11' ? 660 : 760, wallH = 230;
       const wagon = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, wallH, boxLen), campMat);
       wagon.position.set(0, anchor.y + 40, anchor.z + 20);
       wagon.castShadow = true;
       group.add(wagon);
-
       const frontBench = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 30, 60, 140), MATS.mainFrame);
       frontBench.position.set(0, anchor.y + 70, anchor.z + 180);
       group.add(frontBench);
-
       if (!isDoubleMode) {
         const rearBench = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW - 30, 60, 140), MATS.mainFrame);
         rearBench.position.set(0, anchor.y + 70, anchor.z - 140);
         group.add(rearBench);
       }
-
       [-1, 1].forEach(s => {
         const legTop = new THREE.Vector3(s * (moduleNativeW / 2 - 20), anchor.y - 60, anchor.z + 220);
         const legBot = new THREE.Vector3(s * (moduleNativeW / 2 - 20), kine.frontWheelCenter.y + 35, anchor.z + 220);
@@ -909,18 +1034,14 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       });
       break;
     }
-
     case 'S13':
     case 'S14': {
-      // 中型/大型载货舱：岩石灰 + 胡桃木纹桌板
       const cargoMat = makeMat(0x52525B, 0.65);
-      const cargoLen = cabinId === 'S13' ? 540 : 650;
-      const cargoH = 220;
+      const cargoLen = cabinId === 'S13' ? 540 : 650, cargoH = 220;
       const bin = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW, cargoH, cargoLen), cargoMat);
       bin.position.set(0, anchor.y + 30, anchor.z);
       bin.castShadow = true;
       group.add(bin);
-
       if (state.showTray && !isDoubleMode) {
         const trayMat = makeMat(0xA67C52, 0.4);
         const tray = new THREE.Mesh(new THREE.BoxGeometry(moduleNativeW + 16, 18, cargoLen + 16), trayMat);
@@ -930,9 +1051,7 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       }
       break;
     }
-
     case 'S15': {
-      // 小型软载货舱：橄榄绿机能布兜
       const softMat = new THREE.MeshStandardMaterial({ color: 0x4B5E53, roughness: 0.82 });
       const lowP = kine.portLow;
       const bagH = state.foldProgress > 0.3 ? 75 : 165;
@@ -941,7 +1060,6 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
       bag.position.set(0, lowP.y - 35, lowP.z + 35);
       bag.castShadow = true;
       group.add(bag);
-
       [-1, 1].forEach(s => {
         const pPort = new THREE.Vector3(s * (frameWidth / 2 - 14), lowP.y, lowP.z);
         const pBag = new THREE.Vector3(s * (moduleNativeW / 2 - 12), lowP.y - 25, lowP.z + 35);
@@ -954,49 +1072,60 @@ function buildCabinModel(cabinId, placement, kine, frameWidth, isDoubleMode, fol
   return group;
 }
 
-// ==========================================
-// 7. 场景主更新函数
-// ==========================================
-function updateScene() {
-  while (strollerRoot.children.length > 0) {
-    strollerRoot.remove(strollerRoot.children[0]);
-  }
+// ============================================================================
+// 7. 场景主更新函数 (支持异步拉取 GitHub 单舱/双舱/整车 STEP/GLB 文件并装配)
+// ============================================================================
+let renderToken = 0;
+
+async function updateScene() {
+  const currentToken = ++renderToken;
 
   state.wheelsAttached = document.getElementById('toggle-wheels').checked;
   state.barsAttached = document.getElementById('toggle-bars').checked;
   state.showPorts = document.getElementById('toggle-ports').checked;
   state.showTray = document.getElementById('tray-toggle').checked;
 
+  const nextGroup = new THREE.Group();
+
+  // 如果选择了“整车CAD”模式，优先加载 models/full/stroller.(glb|step)
+  if (state.cabinMode === 'fullcad') {
+    const fullCad = await loadCadAsset('full_assembly', MODEL_MANIFEST.fullAssembly.path);
+    if (currentToken !== renderToken) return;
+    if (fullCad) {
+      nextGroup.add(fullCad);
+      replaceStrollerRoot(nextGroup);
+      updateInfoPanel();
+      return;
+    }
+  }
+
   const wheelSpec = WHEEL_SPECS[state.wheelSize];
   const kine = computeKinematics(state.foldProgress, wheelSpec, state.wheelsAttached);
-
   const tubeThickness = 28;
   const xCenterOffset = state.frameWidth / 2 - tubeThickness / 2;
 
   [-1, 1].forEach(sideSign => {
     const x = sideSign * xCenterOffset;
-
     const pFrontStrut = new THREE.Vector3(x, kine.frontStrutTop.y, kine.frontStrutTop.z);
     const pMainHinge  = new THREE.Vector3(x, kine.mainHinge.y, kine.mainHinge.z);
     const pMainTop    = new THREE.Vector3(x, kine.mainTop.y, kine.mainTop.z);
-
     const pSubRear    = new THREE.Vector3(x, kine.subRear.y, kine.subRear.z);
     const pSubMid     = new THREE.Vector3(x, kine.subMid.y, kine.subMid.z);
     const pSubFront   = new THREE.Vector3(x, kine.subFront.y, kine.subFront.z);
 
-    strollerRoot.add(createBoxBetween(pFrontStrut, pMainHinge, 34, tubeThickness, MATS.mainFrame));
-    strollerRoot.add(createBoxBetween(pMainHinge, pMainTop, 34, tubeThickness, MATS.mainFrame));
+    nextGroup.add(createBoxBetween(pFrontStrut, pMainHinge, 34, tubeThickness, MATS.mainFrame));
+    nextGroup.add(createBoxBetween(pMainHinge, pMainTop, 34, tubeThickness, MATS.mainFrame));
 
     const hingeCyl = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, tubeThickness + 8, 28), MATS.joint);
     hingeCyl.rotation.z = Math.PI / 2;
     hingeCyl.position.copy(pMainHinge);
     hingeCyl.castShadow = true;
-    strollerRoot.add(hingeCyl);
+    nextGroup.add(hingeCyl);
 
-    strollerRoot.add(createBoxBetween(pSubRear, pSubMid, 24, tubeThickness - 4, MATS.subFrame));
-    strollerRoot.add(createBoxBetween(pSubMid, pSubFront, 24, tubeThickness - 4, MATS.subFrame));
+    nextGroup.add(createBoxBetween(pSubRear, pSubMid, 24, tubeThickness - 4, MATS.subFrame));
+    nextGroup.add(createBoxBetween(pSubMid, pSubFront, 24, tubeThickness - 4, MATS.subFrame));
     const pUpperLink = pMainHinge.clone().lerp(pMainTop, 0.42);
-    strollerRoot.add(createBoxBetween(pSubMid, pUpperLink, 20, tubeThickness - 6, MATS.subFrame));
+    nextGroup.add(createBoxBetween(pSubMid, pUpperLink, 20, tubeThickness - 6, MATS.subFrame));
 
     if (state.showPorts) {
       const ports = [
@@ -1008,67 +1137,110 @@ function updateScene() {
         const portMesh = new THREE.Mesh(new THREE.CylinderGeometry(15, 15, tubeThickness + 14, 24), pt.mat);
         portMesh.rotation.z = Math.PI / 2;
         portMesh.position.set(x, pt.pos.y, pt.pos.z);
-        strollerRoot.add(portMesh);
+        nextGroup.add(portMesh);
       });
     }
 
-    strollerRoot.add(buildWheelAssembly(true, sideSign, x, kine, wheelSpec, state.wheelsAttached));
-    strollerRoot.add(buildWheelAssembly(false, sideSign, x, kine, wheelSpec, state.wheelsAttached));
+    nextGroup.add(buildWheelAssembly(true, sideSign, x, kine, wheelSpec, state.wheelsAttached));
+    nextGroup.add(buildWheelAssembly(false, sideSign, x, kine, wheelSpec, state.wheelsAttached));
   });
 
   if (state.barsAttached) {
     const fLeft = new THREE.Vector3(-xCenterOffset, kine.frontStrutTop.y, kine.frontStrutTop.z);
     const fRight = new THREE.Vector3(xCenterOffset, kine.frontStrutTop.y, kine.frontStrutTop.z);
-    strollerRoot.add(createTubeBetween(fLeft, fRight, 14, MATS.detachBar));
+    nextGroup.add(createTubeBetween(fLeft, fRight, 14, MATS.detachBar));
 
     const rLeft = new THREE.Vector3(-xCenterOffset, kine.rearStrutTop.y, kine.rearStrutTop.z);
     const rRight = new THREE.Vector3(xCenterOffset, kine.rearStrutTop.y, kine.rearStrutTop.z);
-    strollerRoot.add(createTubeBetween(rLeft, rRight, 16, MATS.detachBar));
+    nextGroup.add(createTubeBetween(rLeft, rRight, 16, MATS.detachBar));
 
     const brakePedal = new THREE.Mesh(new THREE.BoxGeometry(46, 14, 62), MATS.brakePedal);
     brakePedal.position.set(xCenterOffset * 0.55, kine.rearStrutTop.y - 10, kine.rearStrutTop.z - 32);
     brakePedal.rotation.x = -0.3;
-    strollerRoot.add(brakePedal);
+    nextGroup.add(brakePedal);
 
     [-1, 1].forEach(sideSign => {
       const x = sideSign * xCenterOffset;
       const pStart = new THREE.Vector3(x, kine.mainTop.y, kine.mainTop.z);
       const pEnd   = new THREE.Vector3(x, kine.handleTip.y, kine.handleTip.z);
-      strollerRoot.add(createTubeBetween(pStart, pEnd, 13, MATS.detachBar));
+      nextGroup.add(createTubeBetween(pStart, pEnd, 13, MATS.detachBar));
     });
     const hLeft = new THREE.Vector3(-xCenterOffset, kine.handleTip.y, kine.handleTip.z);
     const hRight = new THREE.Vector3(xCenterOffset, kine.handleTip.y, kine.handleTip.z);
-    strollerRoot.add(createTubeBetween(hLeft, hRight, 15, MATS.handleGrip));
+    nextGroup.add(createTubeBetween(hLeft, hRight, 15, MATS.handleGrip));
   }
 
+  // 单舱或双舱挂载逻辑
   if (state.cabinMode === 'single') {
     const spec = SINGLE_CABINS.find(c => c.id === state.selectedId);
     if (spec) {
       const primaryPort = spec.ports.includes('LOW') && spec.ports.length === 1 ? 'LOW' : 'MID';
-      strollerRoot.add(buildCabinModel(spec.id, primaryPort, kine, state.frameWidth, false, state.foldProgress));
+      const cabinGroup = await buildCabinModelAsync(spec.id, primaryPort, kine, state.frameWidth, false, state.foldProgress);
+      if (currentToken !== renderToken) return;
+      nextGroup.add(cabinGroup);
     }
   } else if (state.cabinMode === 'double') {
     const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
     if (dSpec) {
-      const lowerPlacement = dSpec.ports[0];
-      const upperPlacement = dSpec.ports[dSpec.ports.length - 1];
-      strollerRoot.add(buildCabinModel(dSpec.lower, lowerPlacement, kine, state.frameWidth, true, state.foldProgress));
-      strollerRoot.add(buildCabinModel(dSpec.upper, upperPlacement, kine, state.frameWidth, true, state.foldProgress));
+      // 1) 优先探测 GitHub 上是否上传了独立的 D01~D35 整体双舱文件 (models/doubles/Dxx 或 models/cabins/Dxx)
+      const candidatePaths = MODEL_MANIFEST.doubles.folders.map(folder => `${folder}/${dSpec.id}`);
+      const fullDoubleGroup = await loadCadAsset(`double_${dSpec.id}`, candidatePaths);
+      if (currentToken !== renderToken) return;
+
+      if (fullDoubleGroup) {
+        // 找到独立双舱 CAD 模型，吸附到车架基准位置
+        const baseAnchor = dSpec.ports[0] === 'LOW' ? kine.portLow : kine.portMid;
+        const offset = MODEL_MANIFEST.doubles.offset || [0, 0, 0];
+        fullDoubleGroup.position.set(
+          baseAnchor.x + offset[0],
+          baseAnchor.y + offset[1],
+          baseAnchor.z + offset[2]
+        );
+        if (state.foldProgress > 0.05) {
+          fullDoubleGroup.traverse(c => {
+            if (c.isMesh && c.material) {
+              c.material = c.material.clone();
+              c.material.transparent = true;
+              c.material.opacity = 0.25;
+            }
+          });
+        }
+        nextGroup.add(fullDoubleGroup);
+      } else {
+        // 2) 若尚未上传独立 Dxx 文件，自动回退为“下方单舱 + 上方单舱”实时拼装
+        const lowerPlacement = dSpec.ports[0];
+        const upperPlacement = dSpec.ports[dSpec.ports.length - 1];
+        const [lowerGroup, upperGroup] = await Promise.all([
+          buildCabinModelAsync(dSpec.lower, lowerPlacement, kine, state.frameWidth, true, state.foldProgress),
+          buildCabinModelAsync(dSpec.upper, upperPlacement, kine, state.frameWidth, true, state.foldProgress)
+        ]);
+        if (currentToken !== renderToken) return;
+        nextGroup.add(lowerGroup);
+        nextGroup.add(upperGroup);
+      }
     }
   }
 
+  replaceStrollerRoot(nextGroup);
   updateInfoPanel();
 }
 
-// ==========================================
+function replaceStrollerRoot(newGroup) {
+  while (strollerRoot.children.length > 0) {
+    strollerRoot.remove(strollerRoot.children[0]);
+  }
+  strollerRoot.add(newGroup);
+}
+
+// ============================================================================
 // 8. UI 交互与规格联动逻辑
-// ==========================================
+// ============================================================================
 function populateCabinSelect() {
   const select = document.getElementById('cabin-select');
   const wrap = document.getElementById('cabin-select-wrap');
   select.innerHTML = '';
 
-  if (state.cabinMode === 'none') {
+  if (state.cabinMode === 'none' || state.cabinMode === 'fullcad') {
     wrap.classList.add('hidden');
     return;
   }
@@ -1091,11 +1263,12 @@ function populateCabinSelect() {
 
 function setCabinMode(mode) {
   state.cabinMode = mode;
-  ['single', 'double', 'none'].forEach(m => {
-    document.getElementById(`mode-${m}`).classList.toggle('seg-active', m === mode);
+  ['single', 'double', 'none', 'fullcad'].forEach(m => {
+    const btn = document.getElementById(`mode-${m}`);
+    if (btn) btn.classList.toggle('seg-active', m === mode);
   });
   populateCabinSelect();
-  if (mode !== 'none') {
+  if (mode === 'single' || mode === 'double') {
     onCabinChange(state.selectedId);
   } else {
     updateWidthButtonsAvailability();
@@ -1130,7 +1303,7 @@ function onCabinChange(id) {
 
 function updateWidthButtonsAvailability() {
   const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
-  const item = state.cabinMode === 'none' ? null : list.find(x => x.id === state.selectedId);
+  const item = (state.cabinMode === 'none' || state.cabinMode === 'fullcad') ? null : list.find(x => x.id === state.selectedId);
 
   [380, 550, 650].forEach(w => {
     const btn = document.getElementById(`width-${w}`);
@@ -1199,28 +1372,65 @@ function updateInfoPanel() {
     ? `${totalW} mm (${wheelSpec.name})`
     : `${totalW} mm (已拆轮)`;
 
+  const pathEl = document.getElementById('spec-cad-path');
+  const badgeEl = document.getElementById('asset-source-badge');
+
+  if (state.cabinMode === 'fullcad') {
+    const cached = cadAssetCache.get('full_assembly');
+    const isLoaded = cached && cached.status === 'loaded';
+    document.getElementById('spec-code').textContent = 'FULL CAD';
+    document.getElementById('spec-ports').textContent = '整车总装文件';
+    document.getElementById('spec-children').textContent = 'CAD Native';
+    document.getElementById('spec-title').textContent = '整车 STEP / GLB 总装模型';
+    document.getElementById('spec-desc').textContent = isLoaded
+      ? `当前正在直接渲染您上传至 GitHub 的 ${cached.foundPath} 真实工程文件。`
+      : '未检测到 models/full/stroller.(glb|step) 文件，请上传至 GitHub 仓库对应目录后点击顶部“刷新模型”。';
+    pathEl.textContent = '监控路径: models/full/stroller.(glb|step|stp)';
+    badgeEl.textContent = isLoaded ? `✓ GitHub ${cached.ext}` : '等待上传';
+    badgeEl.className = isLoaded
+      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
+      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
+    return;
+  }
+
   if (state.cabinMode === 'none') {
     document.getElementById('spec-code').textContent = 'CHASSIS';
     document.getElementById('spec-ports').textContent = '空载未挂载';
     document.getElementById('spec-children').textContent = '0 Seat';
     document.getElementById('spec-title').textContent = '主车架空载架构';
     document.getElementById('spec-desc').textContent = '主车架由主梁、副梁在同一平面内铰接组成；折叠后把手翻转至后轮后侧触地，前轮收入后轮前侧，实现稳固独自站立。';
+    pathEl.textContent = '监控路径: models/frame/side_wing.(glb|step)';
+    badgeEl.textContent = '参数化底盘';
+    badgeEl.className = 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500';
     return;
   }
 
   if (state.cabinMode === 'single') {
     const s = SINGLE_CABINS.find(x => x.id === state.selectedId);
+    const cached = cadAssetCache.get(`cabin_${s.id}`);
+    const isLoaded = cached && cached.status === 'loaded';
     document.getElementById('spec-code').textContent = s.id;
     document.getElementById('spec-ports').textContent = s.portLabel;
     document.getElementById('spec-children').textContent = `${s.children} ${s.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = s.name;
     document.getElementById('spec-desc').textContent = s.desc;
+    pathEl.textContent = isLoaded
+      ? `已加载: ${cached.foundPath}`
+      : `模型路径: models/cabins/${s.id}.(glb|step|stp)`;
+    badgeEl.textContent = isLoaded ? `✓ GitHub ${cached.ext}` : '1:1 参数化兜底';
+    badgeEl.className = isLoaded
+      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
+      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500';
   } else {
     const d = DOUBLE_CABINS.find(x => x.id === state.selectedId);
+    const doubleCached = cadAssetCache.get(`double_${d.id}`);
+    const isDoubleLoaded = doubleCached && doubleCached.status === 'loaded';
+
     document.getElementById('spec-code').textContent = d.id;
     document.getElementById('spec-ports').textContent = `${d.portLabel} 接口`;
     document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = d.name;
+
     let extraNote = `双舱组合：下方安装 [${d.lower}] ＋ 上方安装 [${d.upper}]。`;
     if (d.lower === 'S11' || d.lower === 'S12') {
       extraNote += ' 露营舱参与双舱时后排拆座或停用，下方仅保留前排乘坐。';
@@ -1229,6 +1439,16 @@ function updateInfoPanel() {
       extraNote += ' 下方宠物舱采用低顶/拆顶状态，无需抬高上方儿童模块。';
     }
     document.getElementById('spec-desc').textContent = extraNote;
+
+    if (isDoubleLoaded) {
+      pathEl.textContent = `已加载双舱总成: ${doubleCached.foundPath}`;
+      badgeEl.textContent = `✓ 双舱CAD ${doubleCached.ext}`;
+      badgeEl.className = 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold';
+    } else {
+      pathEl.textContent = `优先路径: models/doubles/${d.id}.(glb|step) 或拼装 ${d.lower}+${d.upper}`;
+      badgeEl.textContent = '模块化自动拼装';
+      badgeEl.className = 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500';
+    }
   }
 }
 
