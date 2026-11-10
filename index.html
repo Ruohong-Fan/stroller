@@ -1148,10 +1148,8 @@ async function updateScene() {
     ? MODEL_MANIFEST.frame.fullByWidth.folded
     : MODEL_MANIFEST.frame.fullByWidth[state.frameWidth];
 
-  const [customFullFrame, customSideWing, customCrossbar, customWheel] = await Promise.all([
-    loadCadAsset(`frame_full_${state. foldProgress > 0.8 ? 'folded' : state.frameWidth}`, fullFrameCandidates),
-    loadCadAsset('frame_side_wing', MODEL_MANIFEST.frame.sideWing),
-    loadCadAsset(`frame_crossbar_${state.frameWidth}`, MODEL_MANIFEST.frame.crossbar[state.frameWidth]),
+  const [customFullFrame, customWheel] = await Promise.all([
+    loadCadAsset(`frame_full_${state.foldProgress > 0.8 ? 'folded' : state.frameWidth}`, fullFrameCandidates),
     wheelManifest ? loadCadAsset(`wheel_${state.wheelSize}`, wheelManifest.path) : Promise.resolve(null)
   ]);
   if (currentToken !== renderToken) return;
@@ -1159,12 +1157,6 @@ async function updateScene() {
   // 1) 构建或加载主车架 (支持整体车架模型、或单侧翼片模型、或1:1参数化运动学车架)
   if (customFullFrame) {
     customFullFrame.position.y = kine.rearWheelCenter.y;
-    nextGroup.add(customFullFrame);
-    [-1, 1].forEach(sideSign => {
-      const x = sideSign * xCenterOffset;
-      nextGroup.add(buildWheelAssembly(true, sideSign, x, kine, wheelSpec, state.wheelsAttached, customWheel));
-      nextGroup.add(buildWheelAssembly(false, sideSign, x, kine, wheelSpec, state.wheelsAttached, customWheel));
-    });
   } else {
     [-1, 1].forEach(sideSign => {
       const x = sideSign * xCenterOffset;
