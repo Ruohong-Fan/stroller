@@ -280,39 +280,22 @@ const MODEL_MANIFEST = {
   stepUpAxis: 'Z_UP',
   unitScale: 1.0,
 
-  // 车轮专属模型优先，文件名中的宽度使用车架实际宽度。
   noCabin: {
-    getPaths: (width, postureState, wheelSize) => [
-      `no_cabin/w${width}_state${postureState}_wheel_${wheelSize}`,
-      `no_cabin/state${postureState}_w${width}_wheel_${wheelSize}`,
-      `no_cabin/w${width}_state${postureState}`,
-      `no_cabin/state${postureState}_w${width}`,
-      `no_cabin/w${width}`,
-      `no_cabin/state${postureState}`
-    ]
+    getPaths: (width, postureState, wheelSize) =>
+      [`no_cabin/w${width}_state${postureState}_wheel_${wheelSize}`]
   },
 
-  cabinPaths: (folder, id, width, postureState, wheelSize) => [
-    `${folder}/${id}_w${width}_state${postureState}_wheel_${wheelSize}`,
-    `${folder}/${id}_state${postureState}_w${width}_wheel_${wheelSize}`,
-    `${folder}/${id}`
-  ],
-
-  // 35种双座舱 (models/double_cabin/D01 ~ D35)
-  doubleCabinsFolder: 'double_cabin',
-  doubles: {
-    folders: ['double_cabin']
-  },
+  cabinPaths: (folder, id, width, postureState, wheelSize) =>
+    [`${folder}/${id}_w${width}_state${postureState}_wheel_${wheelSize}`],
 
   // other 零部件路径映射
   other: {
     wheels: {
-      S: ['other/wheel_S', 'other/wheel'],
-      M: ['other/wheel_M', 'other/wheel'],
-      L: ['other/wheel_L', 'other/wheel']
+      S: ['other/wheel_S'],
+      M: ['other/wheel_M'],
+      L: ['other/wheel_L']
     },
-    crossbar: ['other/crossbar', 'other/bars'],
-    mainBeam: ['other/main_beam', 'other/frame']
+    crossbar: ['other/crossbar']
   }
 };
 
@@ -664,35 +647,13 @@ async function updateScene() {
     } else if (state.cabinMode === 'double') {
       const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
       if (dSpec) {
-        // 优先读取 double_cabin/Dxx 整体模型
-        const doublePaths = MODEL_MANIFEST.doubles.folders.flatMap(folder =>
-          MODEL_MANIFEST.cabinPaths(folder, dSpec.id, state.frameWidth, state.postureState, state.wheelSize)
+        const doubleModel = await loadCadAsset(
+          getCabinCacheKey('double', dSpec.id),
+          MODEL_MANIFEST.cabinPaths('double_cabin', dSpec.id, state.frameWidth, state.postureState, state.wheelSize)
         );
-        const doubleModel = await loadCadAsset(getCabinCacheKey('double', dSpec.id), doublePaths);
         if (currentToken !== renderToken) return;
 
-        if (doubleModel) {
-          nextGroup.add(doubleModel);
-        } else {
-          // 若没有整体双舱，尝试分别加载上下两个单舱
-          const [lowerModel, upperModel] = await Promise.all([
-            loadCadAsset(
-              getCabinCacheKey('single', dSpec.lower),
-              MODEL_MANIFEST.cabinPaths('single_cabin', dSpec.lower, state.frameWidth, state.postureState, state.wheelSize)
-            ),
-            loadCadAsset(
-              getCabinCacheKey('single', dSpec.upper),
-              MODEL_MANIFEST.cabinPaths('single_cabin', dSpec.upper, state.frameWidth, state.postureState, state.wheelSize)
-            )
-          ]);
-          if (currentToken !== renderToken) return;
-          if (lowerModel) nextGroup.add(lowerModel);
-          if (upperModel) {
-            // 给上方座舱一个垂直偏移量 (比如向上平移 350mm)
-            upperModel.position.y += 350;
-            nextGroup.add(upperModel);
-          }
-        }
+        if (doubleModel) nextGroup.add(doubleModel);
       }
     }
 
