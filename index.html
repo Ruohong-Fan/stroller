@@ -132,10 +132,11 @@
     </div>
 
     <!-- 胶囊分段选择器 -->
-    <div class="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-zinc-100/90 border border-zinc-200/60">
-      <button id="mode-single" onclick="setCabinMode('single')" class="seg-btn py-2 px-2 text-xs rounded-xl seg-active">单舱 (15)</button>
-      <button id="mode-double" onclick="setCabinMode('double')" class="seg-btn py-2 px-2 text-xs rounded-xl">双舱 (35)</button>
+    <div class="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-zinc-100/90 border border-zinc-200/60">
+      <button id="mode-single" onclick="setCabinMode('single')" class="seg-btn py-2 px-2 text-xs rounded-xl seg-active">单舱</button>
+      <button id="mode-double" onclick="setCabinMode('double')" class="seg-btn py-2 px-2 text-xs rounded-xl">双舱</button>
       <button id="mode-none" onclick="setCabinMode('none')" class="seg-btn py-2 px-2 text-xs rounded-xl">纯车架</button>
+      <button id="mode-other" onclick="setCabinMode('other')" class="seg-btn py-2 px-2 text-xs rounded-xl">其他</button>
     </div>
 
     <div id="cabin-select-wrap" class="pt-0.5">
@@ -214,33 +215,6 @@
     </div>
   </section>
 
-  <!-- 05. 模块化组件开关 (对应 other 文件夹零部件) -->
-  <section class="space-y-2 pt-3 border-t border-zinc-200/70">
-    <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">05 · Components (/models/other/)</label>
-    <div class="space-y-1.5 pt-0.5">
-      <label class="flex items-center justify-between p-2.5 rounded-2xl bg-white/80 border border-zinc-200/80 cursor-pointer hover:border-zinc-300 transition">
-        <div>
-          <div class="text-xs font-medium text-zinc-800">独立车轮组件</div>
-          <div class="text-[10px] text-zinc-400">读取 other/wheel_S/M/L</div>
-        </div>
-        <div class="relative inline-flex items-center">
-          <input type="checkbox" id="toggle-wheels" checked onchange="updateScene()" class="sr-only peer" />
-          <div class="w-9 h-5 bg-zinc-200 rounded-full peer peer-checked:bg-zinc-900 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-        </div>
-      </label>
-
-      <label class="flex items-center justify-between p-2.5 rounded-2xl bg-white/80 border border-zinc-200/80 cursor-pointer hover:border-zinc-300 transition">
-        <div>
-          <div class="text-xs font-medium text-zinc-800">把手 & 前后横杠</div>
-          <div class="text-[10px] text-zinc-400">读取 other/crossbar</div>
-        </div>
-        <div class="relative inline-flex items-center">
-          <input type="checkbox" id="toggle-bars" checked onchange="updateScene()" class="sr-only peer" />
-          <div class="w-9 h-5 bg-zinc-200 rounded-full peer peer-checked:bg-zinc-900 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-        </div>
-      </label>
-    </div>
-  </section>
 </aside>
 
 <!-- 右上角高定规格参数卡片 -->
@@ -421,8 +395,6 @@ const state = {
   frameWidth: 550,
   wheelSize: 'M',
   postureState: 1,    // 1:安装完成, 2:折叠中, 3:折叠后站立, 4:拆车轮, 5:拆横杆, 6:均拆
-  wheelsAttached: true,
-  barsAttached: true,
   showTray: false,
   cacheBust: Date.now()
 };
@@ -659,9 +631,6 @@ let renderToken = 0;
 async function updateScene() {
   const currentToken = ++renderToken;
 
-  state.wheelsAttached = document.getElementById('toggle-wheels').checked;
-  state.barsAttached = document.getElementById('toggle-bars').checked;
-
   const nextGroup = new THREE.Group();
 
   // 1) 纯车架模式 (no_cabin) 或 带座舱模式
@@ -713,8 +682,7 @@ async function updateScene() {
       }
     }
 
-    // 3) 若勾选了 other 零部件（车轮与横杆），异步加载并附加
-    if (state.wheelsAttached && state.postureState !== 4 && state.postureState !== 6) {
+    if (state.cabinMode === 'other') {
       const wheelPaths = MODEL_MANIFEST.other.wheels[state.wheelSize];
       const wheelModel = await loadCadAsset(`other_wheel_${state.wheelSize}`, wheelPaths);
       if (currentToken !== renderToken) return;
@@ -729,9 +697,7 @@ async function updateScene() {
           });
         });
       }
-    }
 
-    if (state.barsAttached && state.postureState !== 5 && state.postureState !== 6) {
       const barModel = await loadCadAsset('other_crossbar', MODEL_MANIFEST.other.crossbar);
       if (currentToken !== renderToken) return;
       if (barModel) {
@@ -759,7 +725,7 @@ function populateCabinSelect() {
   const wrap = document.getElementById('cabin-select-wrap');
   select.innerHTML = '';
 
-  if (state.cabinMode === 'none') {
+  if (state.cabinMode === 'none' || state.cabinMode === 'other') {
     wrap.classList.add('hidden');
     return;
   }
@@ -782,7 +748,7 @@ function populateCabinSelect() {
 
 function setCabinMode(mode) {
   state.cabinMode = mode;
-  ['single', 'double', 'none'].forEach(m => {
+  ['single', 'double', 'none', 'other'].forEach(m => {
     const btn = document.getElementById(`mode-${m}`);
     if (btn) btn.classList.toggle('seg-active', m === mode);
   });
@@ -796,6 +762,9 @@ function setCabinMode(mode) {
   if (mode === 'single' || mode === 'double') {
     onCabinChange(state.selectedId);
   } else {
+    document.getElementById('tray-option').classList.add('hidden');
+    document.getElementById('tray-option').classList.remove('flex');
+    document.getElementById('tray-toggle').checked = false;
     updateWidthButtonsAvailability();
     updateScene();
   }
@@ -828,7 +797,9 @@ function onCabinChange(id) {
 
 function updateWidthButtonsAvailability() {
   const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
-  const item = (state.cabinMode === 'none') ? null : list.find(x => x.id === state.selectedId);
+  const item = (state.cabinMode === 'single' || state.cabinMode === 'double')
+    ? list.find(x => x.id === state.selectedId)
+    : null;
 
   [380, 550, 650].forEach(w => {
     const btn = document.getElementById(`width-${w}`);
@@ -900,6 +871,25 @@ function updateInfoPanel() {
     pathEl.textContent = `查找路径: models/no_cabin/w${state.frameWidth}_state${state.postureState}.(glb|step)`;
     badgeEl.textContent = isLoaded ? `✓ 真实CAD` : '等待上传';
     badgeEl.className = isLoaded
+      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
+      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
+    return;
+  }
+
+  if (state.cabinMode === 'other') {
+    const otherAssets = [
+      cadAssetCache.get(`other_wheel_${state.wheelSize}`),
+      cadAssetCache.get('other_crossbar')
+    ].filter(asset => asset && asset.status === 'loaded');
+
+    document.getElementById('spec-code').textContent = 'OTHER';
+    document.getElementById('spec-posture').textContent = '独立零部件';
+    document.getElementById('spec-children').textContent = '0 Seat';
+    document.getElementById('spec-title').textContent = '其他零部件';
+    document.getElementById('spec-desc').textContent = '独立展示车轮与横杆 CAD 模型。';
+    pathEl.textContent = `查找路径: models/other/wheel_${state.wheelSize}、models/other/crossbar`;
+    badgeEl.textContent = otherAssets.length ? `✓ 已加载 ${otherAssets.length} 个零部件` : '等待上传';
+    badgeEl.className = otherAssets.length
       ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
       : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
     return;
