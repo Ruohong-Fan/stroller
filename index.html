@@ -280,9 +280,11 @@ const MODEL_MANIFEST = {
   stepUpAxis: 'Z_UP',
   unitScale: 1.0,
 
-  // 纯车架 6 种姿态路径映射 (支持按宽度及姿态编号读取)
+  // 车轮专属模型优先，文件名中的宽度使用车架实际宽度。
   noCabin: {
-    getPaths: (width, postureState) => [
+    getPaths: (width, postureState, wheelSize) => [
+      `no_cabin/w${width}_state${postureState}_wheel_${wheelSize}`,
+      `no_cabin/state${postureState}_w${width}_wheel_${wheelSize}`,
       `no_cabin/w${width}_state${postureState}`,
       `no_cabin/state${postureState}_w${width}`,
       `no_cabin/w${width}`,
@@ -290,18 +292,11 @@ const MODEL_MANIFEST = {
     ]
   },
 
-  // 15种单座舱 (models/single_cabin/S01 ~ S15)
-  singleCabinsFolder: 'single_cabin',
-  cabins: {
-    S01: { path: 'single_cabin/S01' }, S02: { path: 'single_cabin/S02' },
-    S03: { path: 'single_cabin/S03' }, S04: { path: 'single_cabin/S04' },
-    S05: { path: 'single_cabin/S05' }, S06: { path: 'single_cabin/S06' },
-    S07: { path: 'single_cabin/S07' }, S08: { path: 'single_cabin/S08' },
-    S09: { path: 'single_cabin/S09' }, S10: { path: 'single_cabin/S10' },
-    S11: { path: 'single_cabin/S11' }, S12: { path: 'single_cabin/S12' },
-    S13: { path: 'single_cabin/S13' }, S14: { path: 'single_cabin/S14' },
-    S15: { path: 'single_cabin/S15' }
-  },
+  cabinPaths: (folder, id, width, postureState, wheelSize) => [
+    `${folder}/${id}_w${width}_state${postureState}_wheel_${wheelSize}`,
+    `${folder}/${id}_state${postureState}_w${width}_wheel_${wheelSize}`,
+    `${folder}/${id}`
+  ],
 
   // 35种双座舱 (models/double_cabin/D01 ~ D35)
   doubleCabinsFolder: 'double_cabin',
@@ -558,6 +553,14 @@ function forceReloadModels() {
   updateScene();
 }
 
+function getNoCabinCacheKey() {
+  return `no_cabin_w${state.frameWidth}_s${state.postureState}_wheel_${state.wheelSize}`;
+}
+
+function getCabinCacheKey(mode, id) {
+  return `${mode}_${id}_w${state.frameWidth}_s${state.postureState}_wheel_${state.wheelSize}`;
+}
+
 // ============================================================================
 // 3. Three.js 摄影棚场景初始化
 // ============================================================================
@@ -636,22 +639,25 @@ async function updateScene() {
   // 1) 纯车架模式 (no_cabin) 或 带座舱模式
   if (state.cabinMode === 'none') {
     // 纯车架展示：根据当前宽度与 6 种标准姿态加载模型
-    const paths = MODEL_MANIFEST.noCabin.getPaths(state.frameWidth, state.postureState);
-    const frameModel = await loadCadAsset(`no_cabin_w${state.frameWidth}_s${state.postureState}`, paths);
+    const paths = MODEL_MANIFEST.noCabin.getPaths(state.frameWidth, state.postureState, state.wheelSize);
+    const frameModel = await loadCadAsset(getNoCabinCacheKey(), paths);
     if (currentToken !== renderToken) return;
 
     if (frameModel) {
       nextGroup.add(frameModel);
     } else {
       // 若尚未上传对应模型，则在画布中央显示提示文字/占位
-      console.warn(`未检测到 no_cabin 文件夹下的模型: 宽度 ${state.frameWidth}, 姿态 ${state.postureState}`);
+      console.warn(`未检测到 no_cabin 文件夹下的模型: 宽度 ${state.frameWidth}, 姿态 ${state.postureState}, 车轮 ${state.wheelSize}`);
     }
   } else {
     // 2) 单座舱 (single_cabin) 或 双座舱 (double_cabin) 模式
     if (state.cabinMode === 'single') {
       const spec = SINGLE_CABINS.find(c => c.id === state.selectedId);
       if (spec) {
-        const cabinModel = await loadCadAsset(`single_${spec.id}`, MODEL_MANIFEST.cabins[spec.id].path);
+        const cabinModel = await loadCadAsset(
+          getCabinCacheKey('single', spec.id),
+          MODEL_MANIFEST.cabinPaths('single_cabin', spec.id, state.frameWidth, state.postureState, state.wheelSize)
+        );
         if (currentToken !== renderToken) return;
         if (cabinModel) nextGroup.add(cabinModel);
       }
@@ -659,8 +665,10 @@ async function updateScene() {
       const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
       if (dSpec) {
         // 优先读取 double_cabin/Dxx 整体模型
-        const doublePaths = MODEL_MANIFEST.doubles.folders.map(f => `${f}/${dSpec.id}`);
-        const doubleModel = await loadCadAsset(`double_${dSpec.id}`, doublePaths);
+        const doublePaths = MODEL_MANIFEST.doubles.folders.flatMap(folder =>
+          MODEL_MANIFEST.cabinPaths(folder, dSpec.id, state.frameWidth, state.postureState, state.wheelSize)
+        );
+        const doubleModel = await loadCadAsset(getCabinCacheKey('double', dSpec.id), doublePaths);
         if (currentToken !== renderToken) return;
 
         if (doubleModel) {
@@ -668,8 +676,14 @@ async function updateScene() {
         } else {
           // 若没有整体双舱，尝试分别加载上下两个单舱
           const [lowerModel, upperModel] = await Promise.all([
-            loadCadAsset(`single_${dSpec.lower}`, MODEL_MANIFEST.cabins[dSpec.lower].path),
-            loadCadAsset(`single_${dSpec.upper}`, MODEL_MANIFEST.cabins[dSpec.upper].path)
+            loadCadAsset(
+              getCabinCacheKey('single', dSpec.lower),
+              MODEL_MANIFEST.cabinPaths('single_cabin', dSpec.lower, state.frameWidth, state.postureState, state.wheelSize)
+            ),
+            loadCadAsset(
+              getCabinCacheKey('single', dSpec.upper),
+              MODEL_MANIFEST.cabinPaths('single_cabin', dSpec.upper, state.frameWidth, state.postureState, state.wheelSize)
+            )
           ]);
           if (currentToken !== renderToken) return;
           if (lowerModel) nextGroup.add(lowerModel);
@@ -857,8 +871,8 @@ function updateInfoPanel() {
   const badgeEl = document.getElementById('asset-source-badge');
 
   if (state.cabinMode === 'none') {
-    const paths = MODEL_MANIFEST.noCabin.getPaths(state.frameWidth, state.postureState);
-    const cached = cadAssetCache.get(`no_cabin_w${state.frameWidth}_s${state.postureState}`);
+    const paths = MODEL_MANIFEST.noCabin.getPaths(state.frameWidth, state.postureState, state.wheelSize);
+    const cached = cadAssetCache.get(getNoCabinCacheKey());
     const isLoaded = cached && cached.status === 'loaded';
 
     document.getElementById('spec-code').textContent = `STATE ${state.postureState}`;
@@ -867,8 +881,8 @@ function updateInfoPanel() {
     document.getElementById('spec-title').textContent = `纯车架 · ${widthName}姿态展示`;
     document.getElementById('spec-desc').textContent = isLoaded
       ? `当前正在渲染真实 CAD 模型: ${cached.foundPath}`
-      : `未检测到 /models/no_cabin/ 下对应文件。请上传 w${state.frameWidth}_state${state.postureState}.glb`;
-    pathEl.textContent = `查找路径: models/no_cabin/w${state.frameWidth}_state${state.postureState}.(glb|step)`;
+      : `未检测到 /models/no_cabin/ 下对应文件。请上传匹配宽度、姿态和车轮的模型（wheel_${state.wheelSize}）`;
+    pathEl.textContent = `查找路径: ${paths.map(path => `models/${path}`).join('、')}`;
     badgeEl.textContent = isLoaded ? `✓ 真实CAD` : '等待上传';
     badgeEl.className = isLoaded
       ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
@@ -897,7 +911,7 @@ function updateInfoPanel() {
 
   if (state.cabinMode === 'single') {
     const s = SINGLE_CABINS.find(x => x.id === state.selectedId);
-    const cached = cadAssetCache.get(`single_${s.id}`);
+    const cached = cadAssetCache.get(getCabinCacheKey('single', s.id));
     const isLoaded = cached && cached.status === 'loaded';
 
     document.getElementById('spec-code').textContent = s.id;
@@ -905,14 +919,16 @@ function updateInfoPanel() {
     document.getElementById('spec-children').textContent = `${s.children} ${s.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = s.name;
     document.getElementById('spec-desc').textContent = s.desc;
-    pathEl.textContent = isLoaded ? `已加载: ${cached.foundPath}` : `路径: models/single_cabin/${s.id}.(glb|step)`;
+    pathEl.textContent = isLoaded
+      ? `已加载: ${cached.foundPath}`
+      : `查找路径: ${MODEL_MANIFEST.cabinPaths('single_cabin', s.id, state.frameWidth, state.postureState, state.wheelSize).map(path => `models/${path}`).join('、')}`;
     badgeEl.textContent = isLoaded ? `✓ 单舱CAD` : '等待上传';
     badgeEl.className = isLoaded
       ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
       : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
   } else {
     const d = DOUBLE_CABINS.find(x => x.id === state.selectedId);
-    const cached = cadAssetCache.get(`double_${d.id}`);
+    const cached = cadAssetCache.get(getCabinCacheKey('double', d.id));
     const isLoaded = cached && cached.status === 'loaded';
 
     document.getElementById('spec-code').textContent = d.id;
@@ -920,7 +936,9 @@ function updateInfoPanel() {
     document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = d.name;
     document.getElementById('spec-desc').textContent = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。`;
-    pathEl.textContent = isLoaded ? `已加载: ${cached.foundPath}` : `路径: models/double_cabin/${d.id}.(glb|step)`;
+    pathEl.textContent = isLoaded
+      ? `已加载: ${cached.foundPath}`
+      : `查找路径: ${MODEL_MANIFEST.cabinPaths('double_cabin', d.id, state.frameWidth, state.postureState, state.wheelSize).map(path => `models/${path}`).join('、')}`;
     badgeEl.textContent = isLoaded ? `✓ 双舱CAD` : '等待上传';
     badgeEl.className = isLoaded
       ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
