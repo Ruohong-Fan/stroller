@@ -153,8 +153,8 @@ def add_accessors(doc: dict, binary: bytearray, geometry: Geometry) -> dict:
 def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float, float, float]) -> int:
     x, y, z0 = anchor
     # Four lightweight mesh groups keep the model easy to inspect and shade.
-    groups = {name: Geometry() for name in ("upholstery", "shell", "frame", "harness")}
-    soft, shell, frame, harness = groups["upholstery"], groups["shell"], groups["frame"], groups["harness"]
+    groups = {name: Geometry() for name in ("upholstery", "shell", "frame", "harness", "legrest")}
+    soft, shell, frame, harness, legrest = (groups[name] for name in ("upholstery", "shell", "frame", "harness", "legrest"))
 
     # Low-profile seat pan and its upholstered top.
     shell.box((x + 0.055, y + 0.115, z0), (0.43, 0.07, 0.43))
@@ -194,7 +194,7 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
         frame.beam((x - 0.155, y + 0.300, side * 0.188), (x - 0.105, y + 0.275, side * 0.198), 0.013)
     frame.beam((x - 0.120, y + 0.055, -0.13), (x - 0.120, y + 0.055, 0.13), 0.012)
     shell.box((x - 0.310, y + 0.087, 0.0), (0.32, 0.070, 0.38), angle=math.radians(8))
-    soft.box((x - 0.310, y + 0.128, 0.0), (0.30, 0.035, 0.35), angle=math.radians(8))
+    legrest.box((x - 0.310, y + 0.130, 0.0), (0.30, 0.040, 0.35), angle=math.radians(8))
 
     # Five-point harness strips and central buckle.
     for side in (-1, 1):
@@ -209,6 +209,7 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
         ("shell", [0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
         ("frame", [0.43, 0.49, 0.55, 1.0], 0.68, 0.34),
         ("harness", [0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
+        ("legrest", [0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
     ):
         material_indices[name] = len(doc["materials"])
         doc["materials"].append({
