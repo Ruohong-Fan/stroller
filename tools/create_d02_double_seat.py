@@ -186,12 +186,15 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
         shell.box((x + 0.015, y + 0.015, side * 0.252), (0.120, 0.095, 0.025))
         frame.beam((x + 0.015, y + 0.015, side * 0.247), (x + 0.015, y + 0.015, side * 0.285), 0.018)
 
-    # Front restraint bar and foot support.
+    # Front restraint bar and an extended padded legrest. The broad shell
+    # panel begins at the seat front and projects forward so it is visible as
+    # a child leg support, rather than hiding as a tiny block beneath the pan.
     frame.beam((x - 0.155, y + 0.300, -0.188), (x - 0.155, y + 0.300, 0.188), 0.013)
     for side in (-1, 1):
         frame.beam((x - 0.155, y + 0.300, side * 0.188), (x - 0.105, y + 0.275, side * 0.198), 0.013)
     frame.beam((x - 0.120, y + 0.055, -0.13), (x - 0.120, y + 0.055, 0.13), 0.012)
-    shell.box((x - 0.145, y + 0.065, 0.0), (0.14, 0.035, 0.29))
+    shell.box((x - 0.310, y + 0.087, 0.0), (0.32, 0.070, 0.38), angle=math.radians(8))
+    soft.box((x - 0.310, y + 0.128, 0.0), (0.30, 0.035, 0.35), angle=math.radians(8))
 
     # Five-point harness strips and central buckle.
     for side in (-1, 1):
