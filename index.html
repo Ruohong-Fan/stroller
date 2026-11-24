@@ -552,8 +552,9 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xF5F4F0);
 scene.fog = new THREE.Fog(0xF5F4F0, 3200, 7500);
 
+let sceneFocus = new THREE.Vector3(0, 420, 0);
 const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 10, 15000);
-camera.position.set(1550, 980, 1650);
+camera.position.set(-1550, 980, 1650);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -690,6 +691,21 @@ function replaceStrollerRoot(newGroup) {
     strollerRoot.remove(strollerRoot.children[0]);
   }
   strollerRoot.add(newGroup);
+
+  const bounds = new THREE.Box3().setFromObject(strollerRoot);
+  if (!bounds.isEmpty()) {
+    sceneFocus.copy(bounds.getCenter(new THREE.Vector3()));
+    const direction = camera.position.clone().sub(controls.target);
+    if (direction.lengthSq() < 1) direction.set(-1550, 560, 1650);
+    direction.normalize();
+    const height = bounds.getSize(new THREE.Vector3()).y;
+    const fitDistance = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.6;
+    const distance = Math.max(2300, fitDistance);
+    controls.target.copy(sceneFocus);
+    camera.position.copy(sceneFocus).addScaledVector(direction, distance);
+    controls.maxDistance = Math.max(4200, distance * 1.6);
+    controls.update();
+  }
 }
 
 // ============================================================================
@@ -896,7 +912,10 @@ function updateInfoPanel() {
     document.getElementById('spec-posture').textContent = `${d.portLabel} 接口`;
     document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = d.name;
-    document.getElementById('spec-desc').textContent = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。`;
+    const conceptNote = (d.id === 'D02' && state.frameWidth === 550 && state.wheelSize === 'M')
+      ? ' 座舱为概念网格，车架沿用 CAD。'
+      : '';
+    document.getElementById('spec-desc').textContent = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。${conceptNote}`;
     pathEl.textContent = isLoaded
       ? `已加载: ${cached.foundPath}`
       : `查找路径: ${MODEL_MANIFEST.cabinPaths('double_cabin', d.id, state.frameWidth, state.postureState, state.wheelSize).map(path => `models/${path}`).join('、')}`;
@@ -912,11 +931,14 @@ function setCameraView(view) {
     const btn = document.getElementById(`cam-${v}`);
     if (btn) btn.classList.toggle('seg-active', v === view);
   });
-  if (view === 'iso') camera.position.set(1550, 980, 1650);
-  if (view === 'side') camera.position.set(1950, 480, 0);
-  if (view === 'front') camera.position.set(0, 520, 1980);
-  if (view === 'top') camera.position.set(0, 2250, 10);
-  controls.target.set(0, 420, 0);
+  const distance = camera.position.distanceTo(controls.target) || 2600;
+  const direction = new THREE.Vector3();
+  if (view === 'iso') direction.set(-1550, 560, 1650).normalize();
+  if (view === 'side') direction.set(1, 0.025, 0);
+  if (view === 'front') direction.set(0, 0.05, 1);
+  if (view === 'top') direction.set(0, 1, 0.005);
+  camera.position.copy(sceneFocus).addScaledVector(direction, distance);
+  controls.target.copy(sceneFocus);
   controls.update();
 }
 
