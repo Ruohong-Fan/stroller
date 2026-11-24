@@ -80,6 +80,17 @@ class Geometry:
         self.triangle(a, b, c)
         self.triangle(a, c, d)
 
+    def side_cheek(self, points, z_center, thickness):
+        """Extrude a triangular molded cheek in the seat's side plane."""
+        z0, z1 = z_center - thickness / 2, z_center + thickness / 2
+        front = [(x, y, z0) for x, y in points]
+        back = [(x, y, z1) for x, y in points]
+        self.triangle(*front)
+        self.triangle(*reversed(back))
+        for i in range(3):
+            j = (i + 1) % 3
+            self.quad(front[i], front[j], back[j], back[i])
+
     def box(self, center, dims, angle=0.0):
         cx, cy, cz = center
         dx, dy, dz = (v / 2 for v in dims)
@@ -160,10 +171,20 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
         frame.beam((x + 0.085, y + 0.275, zz), (x + 0.245, y + 0.520, zz), 0.014)
         frame.beam((x + 0.245, y + 0.520, zz), (x + 0.185, y + 0.595, zz), 0.014)
 
-        # Pair of connector links land directly on the low/high host positions.
+        # Broad molded cheek plates bring the seat shell down to the frame
+        # attachment points. The blocky socket overlaps the chassis host so
+        # the interface reads as a direct, load-bearing snap-in connection.
         host_z = side * 0.22
-        frame.beam((x, y, host_z), (x + 0.045, y + 0.075, side * 0.18), 0.015)
-        frame.beam((x + 0.045, y + 0.075, side * 0.18), (x + 0.110, y + 0.112, side * 0.18), 0.014)
+        shell.side_cheek(
+            [(x - 0.075, y + 0.155), (x + 0.205, y + 0.145), (x + 0.080, y - 0.075)],
+            side * 0.190,
+            0.085,
+        )
+        shell.box((x + 0.015, y + 0.015, host_z), (0.185, 0.145, 0.105))
+        # Large molded latch face and cross-pin make the insertion interface
+        # legible from a 3/4 view without adding a slender support rod.
+        shell.box((x + 0.015, y + 0.015, side * 0.252), (0.120, 0.095, 0.025))
+        frame.beam((x + 0.015, y + 0.015, side * 0.247), (x + 0.015, y + 0.015, side * 0.285), 0.018)
 
     # Front restraint bar and foot support.
     frame.beam((x - 0.155, y + 0.300, -0.188), (x - 0.155, y + 0.300, 0.188), 0.013)
@@ -217,8 +238,8 @@ def main():
     doc, binary = compact_active_scene(doc, binary)
     # The existing chassis contains low and high attachment hosts at these
     # measured centres: LOW x=.280/y=.450, HIGH x=.787/y=.830, z= +/- .220 m.
-    make_seat(doc, binary, "D02_lower_S05_concept", (0.280, 0.450, 0.0))
-    make_seat(doc, binary, "D02_upper_S05_concept", (0.787, 0.830, 0.0))
+    make_seat(doc, binary, "D02_lower_S05_molded_side_mounts_concept", (0.280, 0.450, 0.0))
+    make_seat(doc, binary, "D02_upper_S05_molded_side_mounts_concept", (0.787, 0.830, 0.0))
     write_glb(OUTPUT, doc, binary)
     print(f"Created {OUTPUT.relative_to(ROOT)} ({OUTPUT.stat().st_size} bytes)")
 

@@ -913,7 +913,7 @@ function updateInfoPanel() {
     document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = d.name;
     const conceptNote = (d.id === 'D02' && state.frameWidth === 550 && state.wheelSize === 'M')
-      ? ' 座舱为概念网格，车架沿用 CAD。'
+      ? ' 座舱侧面一体成型卡座为概念设计，车架沿用 CAD。'
       : '';
     document.getElementById('spec-desc').textContent = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。${conceptNote}`;
     pathEl.textContent = isLoaded
