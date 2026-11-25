@@ -191,29 +191,37 @@ def clip(doc, binary, name, tracks):
     doc.setdefault("animations", []).append({"name": name, "samplers": samplers, "channels": channels})
 
 
-def canopy_geometry(opening, lift=0.0):
-    # Each bow runs from one hinge on the upper backrest to the other.
-    # The rear bow wraps over the top edge while the remaining bows fan out.
-    extended = [
-        (0.266, 0.637, 0.256, 0.581, 0.188),
-        (0.225, 0.688, 0.234, 0.635, 0.190),
-        (0.112, 0.719, 0.144, 0.624, 0.193),
-        (-0.017, 0.709, 0.088, 0.622, 0.193),
-        (-0.072, 0.675, 0.045, 0.637, 0.189),
-    ]
-    folded = [
-        (0.266, 0.637, 0.256, 0.581, 0.188),
-        (0.265, 0.643, 0.256, 0.587, 0.189),
-        (0.262, 0.650, 0.257, 0.593, 0.190),
-        (0.257, 0.657, 0.258, 0.599, 0.191),
-        (0.251, 0.664, 0.259, 0.605, 0.192),
-    ]
-    bows = []
-    for i, (closed, opened) in enumerate(zip(folded, extended)):
-        cx, cy, sx, sy, width = [a + opening * (b - a) for a, b in zip(closed, opened)]
-        # Intermediate bows swing above the upper edge before fanning forward.
-        rise = lift * i / (len(extended) - 1)
-        bows.append((cx, cy + rise, sx, sy + rise * 0.25, width))
+# Center and side coordinates of the transverse bows, from the fixed rear
+# seam to the moving leading bow. Each row lists center X/Y, side X/Y, and
+# half width. The leading bow packs behind the hinge and fans forward about 170°.
+CANOPY_REAR_BOW = (0.266, 0.637, 0.256, 0.581, 0.188)
+CANOPY_BOW_STOPS = (
+    (
+        (0.268, 0.623, 0.256, 0.577, 0.188), (0.271, 0.606, 0.257, 0.573, 0.189),
+        (0.272, 0.587, 0.258, 0.566, 0.190), (0.270, 0.564, 0.258, 0.556, 0.191),
+        (0.269, 0.541, 0.258, 0.545, 0.191),
+    ), (
+        (0.269, 0.644, 0.256, 0.584, 0.189), (0.269, 0.651, 0.256, 0.590, 0.190),
+        (0.265, 0.657, 0.254, 0.597, 0.191), (0.258, 0.661, 0.249, 0.605, 0.192),
+        (0.250, 0.663, 0.244, 0.613, 0.191),
+    ), (
+        (0.253, 0.657, 0.247, 0.595, 0.188), (0.231, 0.679, 0.230, 0.610, 0.190),
+        (0.203, 0.699, 0.211, 0.624, 0.191), (0.170, 0.702, 0.185, 0.634, 0.192),
+        (0.133, 0.711, 0.160, 0.638, 0.191),
+    ), (
+        (0.247, 0.653, 0.251, 0.599, 0.189), (0.221, 0.683, 0.233, 0.631, 0.191),
+        (0.119, 0.714, 0.151, 0.629, 0.192), (0.029, 0.712, 0.110, 0.630, 0.192),
+        (-0.044, 0.700, 0.083, 0.647, 0.190),
+    ), (
+        (0.253, 0.654, 0.250, 0.602, 0.190), (0.225, 0.688, 0.234, 0.635, 0.190),
+        (0.112, 0.719, 0.144, 0.624, 0.193), (-0.017, 0.709, 0.088, 0.622, 0.193),
+        (-0.099, 0.688, 0.065, 0.658, 0.189),
+    ),
+)
+
+
+def canopy_geometry(stop):
+    bows = [CANOPY_REAR_BOW, *CANOPY_BOW_STOPS[stop]]
     fabric, trim = Geometry(), Geometry()
 
     def arch(bow):
@@ -243,15 +251,17 @@ def canopy_geometry(opening, lift=0.0):
         for j in range(len(back) - 1):
             fabric.quad(back[j], front[j], front[j + 1], back[j + 1])
 
-    for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[-1], 0.007)):
+    for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[20], 0.003), (rows[-1], 0.007)):
         trim.tube(row, radius, (1.0, 0.0, 0.0))
     for side, edge in ((-1, 0), (1, -1)):
         hinge = (*CANOPY_EYE, side * 0.1997)
         trim.tube([row[edge] for row in rows], 0.004, (0.0, 0.0, 1.0))
-        for row in (rows[0], rows[-1]):
-            end = row[edge]
-            elbow = (0.251, 0.605, side * 0.1997)
-            trim.tube([hinge, elbow, end], 0.0025, AXIS_Z)
+        elbow = (0.251, 0.605, side * 0.1997)
+        trim.tube([hinge, elbow, rows[0][edge]], 0.0025, AXIS_Z)
+        end = rows[-1][edge]
+        forward = smoothstep((0.240 - end[0]) / 0.105)
+        guide = (0.256 - 0.121 * forward, 0.598 + 0.027 * forward, side * 0.1997)
+        trim.tube([hinge, elbow, guide, end], 0.0025, AXIS_Z)
     return {"canopy": fabric, "canopy_trim": trim}
 
 
@@ -592,11 +602,10 @@ def hip_cover(angle):
 def add_backrest_canopy(doc, binary, name):
     # Both hinge housings are fixed to the upper shell. The canopy's fabric
     # can deploy independently while inheriting the backrest's full rotation.
-    canopy = mesh_node(doc, binary, name + "_Canopy", canopy_geometry(1.0), origin=BACK_PIVOT, morphs=[
-        canopy_geometry(0), canopy_geometry(1 / 3, 0.047), canopy_geometry(2 / 3, 0.030)
-    ])
-    weights = [(w,) for w in (1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
-    clip(doc, binary, name + "_canopy", [(canopy, "weights", (0, 1 / 3, 2 / 3, 1), weights)])
+    shapes = [canopy_geometry(stop) for stop in range(len(CANOPY_BOW_STOPS))]
+    canopy = mesh_node(doc, binary, name + "_Canopy", shapes[-1], origin=BACK_PIVOT, morphs=shapes[:-1])
+    weights = [(float(stop == target),) for stop in range(len(shapes)) for target in range(len(shapes) - 1)]
+    clip(doc, binary, name + "_canopy", [(canopy, "weights", ADJUSTMENT_STEPS, weights)])
 
     hinges = Geometry()
     x, y = CANOPY_EYE
@@ -675,9 +684,12 @@ def make_seat(doc, binary, name, anchor, level, rear=False):
     angle, ground = level
     c, s = math.cos(angle), math.sin(angle)
     x, y = anchor
+    extras = {"reversibleCabin": True}
+    if not rear:
+        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=3)
     root = mesh_node(doc, binary, name, mounts, children=[seat],
                      translation=(c*x - s*y, s*x + c*y - ground, 0.0),
-                     rotation=rotation(AXIS_Z, math.degrees(angle)), extras={"reversibleCabin": True})
+                     rotation=rotation(AXIS_Z, math.degrees(angle)), extras=extras)
     doc["scenes"][doc.get("scene", 0)]["nodes"].append(root)
 
 

@@ -715,7 +715,11 @@ const D02_COMPONENTS = [
     variants: [null, 'guardLeft', 'guardRight', 'guardRemoved'],
     hints: ['闭合', '松开左侧，绕右侧转开', '松开右侧，绕左侧转开', '完全拆下']
   },
-  { key: 'canopy', label: '顶篷', positions: ['收合', '1 档', '2 档', '3 档'], initial: 3 },
+  {
+    key: 'canopy', label: '顶篷', initial: 4,
+    positions: ['1 收合', '2', '3', '4', '5 全展'],
+    hints: ['1 档，完全收合', '2 档', '3 档', '4 档', '5 档，完全展开']
+  },
   {
     key: 'legrest', label: '腿托', initial: 0,
     positions: ['1 微翘', '2', '3', '4', '5 反折'],
@@ -728,10 +732,13 @@ const D02_COMPONENTS = [
   }
 ];
 const D02_FRONT_BACKREST = 'D02_Front_backrest';
+const D02_FRONT_CANOPY = 'D02_Front_canopy';
 const D02_REAR_LEGREST = 'D02_Rear_legrest';
 const D02_FIVE_POSITION_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
+const D02_ALLOW_REAR_LEGREST_AT_FRONT_FLAT = true;
+const D02_STAGE_FRONT_CANOPY_AT_FRONT_FLAT = true;
 const D02_SEATS = [['Front', '前座'], ['Rear', '后座']];
-const D02_REVERSIBLE_POSE = { guardrail: 0, canopy: 3, legrest: 0, backrest: 0 };
+const D02_REVERSIBLE_POSE = { guardrail: 0, canopy: 4, legrest: 0, backrest: 0 };
 const D02_REVERSIBLE_PREVIEW = {
   models: ['550S', '550M', '550L', '650S', '650M', '650L'],
   Front: D02_REVERSIBLE_POSE,
@@ -749,6 +756,9 @@ let d02Loading = false;
 let d02ReclinePhase = null;
 let d02AllowedFacings = new Set(['FF']);
 let d02FacingFallback = false;
+let d02RearLegrestAtFrontFlat = false;
+let d02FrontCanopyClearanceIndex = null;
+let d02FlatLegrestMotion = null;
 
 function buildD02FacingRow(seatIndex, seatLabel) {
   const row = document.createElement('div');
@@ -836,7 +846,8 @@ function buildD02StateControls() {
 }
 
 function frontReclineNeedsStowedLegrest(front) {
-  return Boolean(front.action) && front.index > 0;
+  const angle = D02_BACKREST_ANGLES[front.index];
+  return Boolean(front.action) && angle !== 95 && !(angle === 175 && d02RearLegrestAtFrontFlat);
 }
 
 function updateD02StateControls() {
@@ -885,9 +896,12 @@ function updateD02StateControls() {
   else if (!availablePositions) status.textContent = '此模型暂未提供可调状态。';
   else if (d02FacingFallback) status.textContent = '当前模型不支持此朝向，已恢复双座朝前。';
   else if (fixedPreview) status.textContent = '换向装配预览。切回双座朝前可继续调节。';
+  else if (d02FlatLegrestMotion?.phase === 'returning') status.textContent = '前座顶篷正在恢复所选档位。';
+  else if (d02FlatLegrestMotion?.phase === 'parking') status.textContent = '前座顶篷正在让位，后座腿托随后调整。';
+  else if (d02FlatLegrestMotion) status.textContent = '后座腿托正在调整，前座顶篷保持收拢。';
   else if (d02ReclinePhase === 'restoring') status.textContent = `后座腿托正在恢复到 ${rear.index + 1} 档。`;
   else if (d02ReclinePhase) status.textContent = '前座靠背正在调整，后座腿托暂时收至 5 档。';
-  else if (rearLegrestLocked) status.textContent = '前座后仰时，后座腿托保持在 5 档反折位置，为靠背留出空间。';
+  else if (rearLegrestLocked) status.textContent = '前座处于此角度时，后座腿托保持在 5 档反折位置，为靠背留出空间。';
   else if (availablePositions < positionCount) status.textContent = '此模型的部分动作暂不可用。';
   else status.textContent = '';
   const rearBackrest = d02ControlRows.get('D02_Rear_backrest');
@@ -911,6 +925,15 @@ function supportsD02RotationTimes(clip, suffix, samples) {
     rotation.times.every((time, index) => Math.abs(time - samples[index] * clip.duration) < 1e-5);
 }
 
+function supportsD02CanopyDetents(clip) {
+  const tracks = clip?.tracks?.filter(track => track.name.endsWith('.morphTargetInfluences'));
+  return clip?.duration > 0 && tracks?.length > 0 && tracks.every(track =>
+    D02_FIVE_POSITION_SAMPLES.every(sample =>
+      track.times.some(time => Math.abs(time - sample * clip.duration) < 1e-5)
+    )
+  );
+}
+
 function getD02FacingPreview(pair) {
   if (!/^[FR]{2}$/.test(pair)) return null;
   const preview = D02_FACING_PREVIEWS[pair];
@@ -926,7 +949,7 @@ function hasD02FacingPreviewClips(preview, clips) {
     const clip = clips.get(`D02_${seat}_${component.key}`);
     if (component.key === 'backrest') return supportsD02RotationTimes(clip, '_Backrest.quaternion', D02_FIVE_POSITION_SAMPLES);
     if (component.key === 'legrest') return supportsD02RotationTimes(clip, '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES);
-    return clip?.duration > 0;
+    return supportsD02CanopyDetents(clip);
   }));
 }
 
@@ -968,6 +991,14 @@ function bindD02PoseModel(model, animations) {
   d02Mixer = model && animations.length ? new THREE.AnimationMixer(model) : null;
   d02Loading = false;
   d02ReclinePhase = null;
+  d02FlatLegrestMotion = null;
+  const frontMetadata = model?.getObjectByName('D02_Front')?.userData;
+  d02RearLegrestAtFrontFlat = D02_ALLOW_REAR_LEGREST_AT_FRONT_FLAT && frontMetadata?.rearLegrestAtFrontFlat === true;
+  const clearanceGear = frontMetadata?.frontCanopyClearanceGear;
+  const needsStageAtFlat = d02RearLegrestAtFrontFlat && clearanceGear !== undefined;
+  d02FrontCanopyClearanceIndex = needsStageAtFlat && D02_STAGE_FRONT_CANOPY_AT_FRONT_FLAT &&
+    Number.isInteger(clearanceGear) && clearanceGear >= 1 && clearanceGear <= 3
+    ? clearanceGear - 1 : null;
   const clips = new Map(animations.map(clip => [clip.name, clip]));
   const preview = getD02FacingPreview(state.d02Facing);
   const supportsStow = supportsD02RotationTimes(clips.get(D02_REAR_LEGREST), '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES);
@@ -990,12 +1021,17 @@ function bindD02PoseModel(model, animations) {
       if (name === D02_FRONT_BACKREST && !supportsStow) continue;
       if (name.endsWith('_legrest') && !supportsD02RotationTimes(clip, '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES)) continue;
       if (name.endsWith('_backrest') && !supportsD02RotationTimes(clip, '_Backrest.quaternion', D02_FIVE_POSITION_SAMPLES)) continue;
+      if (name.endsWith('_canopy') && !supportsD02CanopyDetents(clip)) continue;
       control.action = createD02Action(clip);
       if (control.action) playD02Pose(control.action, d02PositionTime(control, initialIndex));
     }
   }
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
   const rear = d02ControlRows.get(D02_REAR_LEGREST);
+  if (needsStageAtFlat && (d02FrontCanopyClearanceIndex === null || !d02ControlRows.get(D02_FRONT_CANOPY).action)) {
+    d02RearLegrestAtFrontFlat = false;
+    d02FrontCanopyClearanceIndex = null;
+  }
   if (!preview && rear.action && frontReclineNeedsStowedLegrest(front)) rear.action.time = rear.action.getClip().duration;
   if (d02Mixer) d02Mixer.update(0);
   updateD02StateControls();
@@ -1006,14 +1042,62 @@ function startD02Transition(control, to, now, duration = 300) {
   control.transition = from === to ? null : { start: now, from, to, duration };
 }
 
+function startD02RearLegrestMotion(to, now, duration = 300) {
+  const front = d02ControlRows.get(D02_FRONT_BACKREST);
+  const rear = d02ControlRows.get(D02_REAR_LEGREST);
+  const atFlat = front.action && front.action.time === front.action.getClip().duration;
+  // The first three rear legrest gears clear even the fully opened canopy.
+  const staysInLowGears = !d02FlatLegrestMotion && Math.max(rear.action.time, to) <= d02PositionTime(rear, 2);
+  if (!atFlat || d02FrontCanopyClearanceIndex === null || staysInLowGears || (rear.action.time === to && !d02FlatLegrestMotion)) {
+    startD02Transition(rear, to, now, duration);
+    return;
+  }
+
+  const canopy = d02ControlRows.get(D02_FRONT_CANOPY);
+  if (rear.action.time === to) {
+    rear.transition = null;
+    d02FlatLegrestMotion = { phase: 'returning', to, duration };
+    startD02Transition(canopy, d02PositionTime(canopy), now);
+    advanceD02FlatLegrestMotion(now);
+    return;
+  }
+  const alreadyParking = d02FlatLegrestMotion?.phase === 'parking';
+  d02FlatLegrestMotion = { phase: 'parking', to, duration };
+  rear.transition = null;
+  if (!alreadyParking) {
+    const clear = d02PositionTime(canopy, d02FrontCanopyClearanceIndex);
+    // Stop any concurrent canopy opening before moving the legrest.
+    startD02Transition(canopy, Math.min(canopy.action.time, clear), now);
+  }
+  advanceD02FlatLegrestMotion(now);
+}
+
+function advanceD02FlatLegrestMotion(now) {
+  const motion = d02FlatLegrestMotion;
+  if (!motion) return;
+  const canopy = d02ControlRows.get(D02_FRONT_CANOPY);
+  const rear = d02ControlRows.get(D02_REAR_LEGREST);
+  const previousPhase = motion.phase;
+  if (motion.phase === 'parking' && !canopy.transition) {
+    motion.phase = 'moving';
+    startD02Transition(rear, motion.to, now, motion.duration);
+  }
+  if (motion.phase === 'moving' && !rear.transition) {
+    motion.phase = 'returning';
+    startD02Transition(canopy, d02PositionTime(canopy), now);
+  }
+  if (motion.phase === 'returning' && !canopy.transition) d02FlatLegrestMotion = null;
+  if (!d02FlatLegrestMotion || previousPhase !== motion.phase) updateD02StateControls();
+}
+
 function startD02FrontRecline(now) {
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
   const rear = d02ControlRows.get(D02_REAR_LEGREST);
   const stowTime = rear.action.getClip().duration;
   front.transition = null;
-  if (rear.action.time !== stowTime) {
+  if (rear.action.time !== stowTime || d02FlatLegrestMotion) {
     d02ReclinePhase = 'stowing';
-    if (rear.transition?.to !== stowTime) startD02Transition(rear, stowTime, now, 350);
+    if (rear.transition?.to !== stowTime && d02FlatLegrestMotion?.to !== stowTime) startD02RearLegrestMotion(stowTime, now, 350);
   } else {
     rear.transition = null;
     d02ReclinePhase = 'reclining';
@@ -1025,16 +1109,16 @@ function advanceD02FrontRecline(now) {
   if (!d02ReclinePhase) return;
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
   const rear = d02ControlRows.get(D02_REAR_LEGREST);
-  if (d02ReclinePhase === 'stowing' && !rear.transition) {
+  if (d02ReclinePhase === 'stowing' && !rear.transition && !d02FlatLegrestMotion) {
     startD02FrontRecline(now);
     updateD02StateControls();
   }
   if (d02ReclinePhase === 'reclining' && !front.transition) {
-    if (!frontReclineNeedsStowedLegrest(front)) startD02Transition(rear, d02PositionTime(rear), now, 350);
-    d02ReclinePhase = rear.transition ? 'restoring' : null;
+    if (!frontReclineNeedsStowedLegrest(front)) startD02RearLegrestMotion(d02PositionTime(rear), now, 350);
+    d02ReclinePhase = rear.transition || d02FlatLegrestMotion ? 'restoring' : null;
     updateD02StateControls();
   }
-  if (d02ReclinePhase === 'restoring' && !rear.transition) {
+  if (d02ReclinePhase === 'restoring' && !rear.transition && !d02FlatLegrestMotion) {
     d02ReclinePhase = null;
     updateD02StateControls();
   }
@@ -1068,7 +1152,11 @@ function setD02Position(control, index) {
   const now = performance.now();
   if (control.variants) queueD02Guard(control, now);
   else if (control.name === D02_FRONT_BACKREST) startD02FrontRecline(now);
-  else startD02Transition(control, d02PositionTime(control), now);
+  else if (control.name === D02_REAR_LEGREST) startD02RearLegrestMotion(d02PositionTime(control), now);
+  else if (control.name === D02_FRONT_CANOPY && d02FlatLegrestMotion) {
+    // Save the requested gear now, but don't raise the canopy before the rear legrest settles.
+    if (d02FlatLegrestMotion.phase === 'returning') startD02Transition(control, d02PositionTime(control), now);
+  } else startD02Transition(control, d02PositionTime(control), now);
   updateD02StateControls();
   syncConfiguratorRoute();
 }
@@ -1088,6 +1176,7 @@ function animateD02Poses(now) {
     }
     updated = true;
   }
+  advanceD02FlatLegrestMotion(now);
   advanceD02FrontRecline(now);
   if (updated) d02Mixer.update(0);
 }
@@ -1455,6 +1544,7 @@ const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'view', 'f
 
 function d02PoseRouteValues(component) {
   if (component.key === 'backrest') return D02_BACKREST_ANGLES;
+  if (component.key === 'canopy') return component.positions.map((_, index) => `c${index + 1}`);
   const first = component.key === 'legrest' ? 1 : 0;
   return component.positions.map((_, index) => index + first);
 }
@@ -1471,7 +1561,12 @@ function restoreD02PoseRoute(seat, value) {
   const positions = (value || '').split('-');
   D02_COMPONENTS.forEach((component, index) => {
     const choices = d02PoseRouteValues(component);
-    const selection = choices.findIndex(choice => String(choice) === positions[index]);
+    const token = positions[index]?.toLowerCase();
+    let selection = choices.findIndex(choice => String(choice) === token);
+    if (component.key === 'canopy' && /^[0-3]$/.test(token || '')) {
+      // Old links stored zero through three, with three fully open.
+      selection = [0, 1, 3, 4][Number(token)];
+    }
     const control = d02ControlRows.get(`D02_${seat}_${component.key}`);
     control.index = selection < 0 ? component.initial : selection;
   });
