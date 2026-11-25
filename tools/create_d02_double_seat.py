@@ -193,9 +193,19 @@ def clip(doc, binary, name, tracks):
     doc.setdefault("animations", []).append({"name": name, "samplers": samplers, "channels": channels})
 
 
-# Center and side coordinates of the transverse bows, from the fixed rear
-# seam to the moving leading bow. Each row lists center X/Y, side X/Y, and
-# half width. The leading bow packs behind the hinge and fans forward about 170°.
+def dome_bow(crown, edge, half_width):
+    """Place a transverse bow by distance up and outward from the backrest pivot."""
+    sine, cosine = math.sin(BACKREST_TILT), math.cos(BACKREST_TILT)
+
+    def point(up, outward):
+        return (BACK_PIVOT[0] + sine * up - cosine * outward,
+                BACK_PIVOT[1] + cosine * up + sine * outward)
+
+    return (*point(*crown), *point(*edge), half_width)
+
+
+# Center and side coordinates of the transverse bows from the fixed rear
+# seam along the roof. Each row lists center X/Y, side X/Y, and half width.
 CANOPY_REAR_BOW = (0.266, 0.637, 0.256, 0.581, 0.188)
 CANOPY_BOW_STOPS = (
     (
@@ -213,24 +223,17 @@ CANOPY_BOW_STOPS = (
     ), (
         (0.247, 0.653, 0.251, 0.599, 0.189), (0.221, 0.683, 0.233, 0.631, 0.191),
         (0.119, 0.714, 0.151, 0.629, 0.192), (0.029, 0.712, 0.110, 0.630, 0.192),
-        (-0.044, 0.700, 0.083, 0.647, 0.190),
+        (-0.028552, 0.689342, 0.083, 0.647, 0.190),
     ), (
-        (0.253, 0.654, 0.250, 0.602, 0.190), (0.225, 0.688, 0.234, 0.635, 0.190),
-        (0.112, 0.719, 0.144, 0.624, 0.193), (-0.017, 0.709, 0.088, 0.622, 0.193),
-        (-0.099, 0.688, 0.065, 0.658, 0.189),
+        dome_bow((0.512, -0.010), (0.462, -0.032), 0.190),
+        dome_bow((0.520, 0.050), (0.473, -0.007), 0.191),
+        dome_bow((0.506, 0.154), (0.454, 0.071), 0.193),
+        dome_bow((0.461, 0.239), (0.445, 0.126), 0.192),
+        dome_bow((0.411, 0.269), (0.454, 0.132), 0.188),
     ),
 )
-
-def dome_bow(crown, edge, half_width):
-    """Place a transverse bow by distance up and outward from the backrest pivot."""
-    sine, cosine = math.sin(BACKREST_TILT), math.cos(BACKREST_TILT)
-
-    def point(up, outward):
-        return (BACK_PIVOT[0] + sine * up - cosine * outward,
-                BACK_PIVOT[1] + cosine * up + sine * outward)
-
-    return (*point(*crown), *point(*edge), half_width)
-
+CANOPY_BOWS_AT_RELEASE = (*CANOPY_BOW_STOPS[-1][:-1],
+                          dome_bow((0.439, 0.268), (0.459, 0.139), 0.189))
 
 # The shade stays rolled at the first four stops. In the fifth, the bows
 # carry the continuous rounded roof over the head and down to the chest.
@@ -240,17 +243,17 @@ CANOPY_VISOR_STOPS = (
     ((0.127, 0.707, 0.155, 0.636, 0.190),),
     ((-0.021, 0.677, 0.088, 0.627, 0.185),),
     (
-        dome_bow((0.421, 0.270), (0.442, 0.105), 0.184),
+        dome_bow((0.397, 0.266), (0.436, 0.111), 0.185),
         dome_bow((0.328, 0.235), (0.337, 0.110), 0.185),
         dome_bow((0.235, 0.234), (0.235, 0.105), 0.185),
         dome_bow((0.145, 0.192), (0.142, 0.100), 0.186),
     ),
 )
 CANOPY_VISOR_FOLDED = (
-    dome_bow((0.440, 0.302), (0.467, 0.105), 0.186),
-    dome_bow((0.433, 0.272), (0.454, 0.107), 0.185),
-    dome_bow((0.421, 0.244), (0.440, 0.108), 0.185),
-    dome_bow((0.405, 0.224), (0.424, 0.107), 0.185),
+    dome_bow((0.434, 0.266), (0.454, 0.132), 0.188),
+    dome_bow((0.429, 0.260), (0.447, 0.123), 0.188),
+    dome_bow((0.422, 0.250), (0.440, 0.111), 0.187),
+    dome_bow((0.410, 0.236), (0.424, 0.107), 0.186),
 )
 
 
@@ -314,18 +317,16 @@ def canopy_geometry(bow_stop, visor_bows):
     for back, front in zip(visor_rows, visor_rows[1:]):
         join_rows(back, front)
 
+    # The internal bow lies within the fabric. Only the continuous outer
+    # hem has a front binding, so the canopy opens as a single profile.
     for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[20], 0.003),
-                        (rows[-1], 0.007), (visor_rows[-1], 0.003)):
+                        (visor_rows[-1], 0.0045)):
         trim.tube(row, radius, (1.0, 0.0, 0.0))
     for side, edge in ((-1, 0), (1, -1)):
         hinge = (*CANOPY_EYE, side * 0.1997)
         trim.tube([row[edge] for row in rows], 0.004, (0.0, 0.0, 1.0))
         elbow = (0.251, 0.605, side * 0.1997)
         trim.tube([hinge, elbow, rows[0][edge]], 0.0025, AXIS_Z)
-        end = rows[-1][edge]
-        forward = smoothstep((0.240 - end[0]) / 0.105)
-        guide = (0.256 - 0.121 * forward, 0.598 + 0.027 * forward, side * 0.1997)
-        trim.tube([hinge, elbow, guide, end], 0.0025, AXIS_Z)
         # A continuous side gusset closes the path to the backrest.
         # Its roots stay under the finished side edge of the shell.
         shoulder = (0.202, 0.485, side * 0.196)
@@ -677,9 +678,9 @@ def add_backrest_canopy(doc, binary, name):
     # Both hinge housings are fixed to the upper shell. The canopy's fabric
     # can deploy independently while inheriting the backrest's full rotation.
     shapes = [canopy_geometry(bow, visor) for bow, visor in zip(CANOPY_BOW_STOPS, CANOPY_VISOR_STOPS)]
-    # Open the leading bow first. The visor then unfurls beneath it, keeping
-    # the fourth rear legrest position clear while the front back is flat.
-    shapes.insert(-1, canopy_geometry(CANOPY_BOW_STOPS[-1], CANOPY_VISOR_FOLDED))
+    # Bring the roof forward before letting out its hem. This keeps the
+    # fourth rear legrest position clear while the front back is flat.
+    shapes.insert(-1, canopy_geometry(CANOPY_BOWS_AT_RELEASE, CANOPY_VISOR_FOLDED))
     times = (*ADJUSTMENT_STEPS[:-1], 0.875, ADJUSTMENT_STEPS[-1])
     canopy = mesh_node(doc, binary, name + "_Canopy", shapes[-1], origin=BACK_PIVOT, morphs=shapes[:-1])
     weights = [(float(stop == target),) for stop in range(len(shapes)) for target in range(len(shapes) - 1)]
