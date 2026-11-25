@@ -80,10 +80,11 @@ class Geometry:
         for face in faces:
             self.quad(*face)
 
-    def seat_pad(self, center, dims, corner, bevel, rear_rise):
+    def seat_pad(self, center, dims, corner, bevel, rear_rise, *, front_width=None):
         """Round the seat in plan and blend the back edge up into the backrest."""
         cx, cy, cz = center
         dx, dy, dz = (v / 2 for v in dims)
+        taper = 0.0 if front_width is None else 1.0 - front_width / dims[2]
 
         def ring(level, inset):
             points = []
@@ -94,7 +95,8 @@ class Geometry:
                     z = sz * (dz - corner) + (corner - inset) * math.sin(angle)
                     ramp = max(0.0, min(1.0, (x - dx + 0.075) / 0.075))
                     rise = rear_rise * ramp**2 * (3 - 2 * ramp)
-                    points.append((cx + x, cy + level + rise, cz + z))
+                    width_scale = 1.0 - taper * (dx - x) / (2 * dx)
+                    points.append((cx + x, cy + level + rise, cz + z * width_scale))
             return points
 
         rings = [
@@ -349,23 +351,30 @@ def add_guardrail(doc, binary, name, base):
     return removal
 
 
-def add_legrest(support, pad, rear):
-    # Keep the rear tray under its own pan, behind the front seat envelope.
-    # The front tray can project farther forward with a shallower slope.
-    start = (-0.143, 0.109)
-    toe = (-0.189, -0.086) if rear else (-0.323, -0.055)
-    dx, dy = start[0] - toe[0], start[1] - toe[1]
-    length = math.hypot(dx, dy)
-    angle = math.atan2(dy, dx)
-    cx, cy = (start[0] + toe[0]) / 2, (start[1] + toe[1]) / 2
-    width = 0.328 if rear else 0.356
-    pad_trim = 0.010
-    support.box((cx, cy, 0.0), (length + 0.020, 0.033, width), angle)
-    pad.box((cx - math.sin(angle) * 0.022 - math.cos(angle) * pad_trim / 2,
-             cy + math.cos(angle) * 0.022 - math.sin(angle) * pad_trim / 2, 0.0),
-            (length - 0.020 - pad_trim, 0.015, width - 0.026), angle)
-    support.box((toe[0] - 0.011, toe[1] - 0.004, 0.0), (0.061, 0.023, width))
-    pad.box((toe[0] - 0.018, toe[1] + 0.011, 0.0), (0.046, 0.011, width - 0.018))
+def add_legrest(doc, binary, name, rear):
+    # The offset arms bring the pad up to the seat lip when deployed and
+    # carry it below the chassis cross tube when inverted under the seat.
+    axis = (-0.173, 0.087, 0.0)
+    length, width = (0.152, 0.292) if rear else (0.173, 0.304)
+    center_x = -0.018 - length / 2
+    tray, pad, arms, brackets = Geometry(), Geometry(), Geometry(), Geometry()
+    # The tapered toe clears the front tires as the casters turn beneath it.
+    tray.seat_pad((center_x, 0.050, 0), (length, 0.018, width), 0.022, 0.004, 0, front_width=0.214)
+    pad.seat_pad((center_x, 0.060, 0), (length - 0.012, 0.013, width - 0.020), 0.018, 0.003, 0, front_width=0.194)
+    for side in (-1, 1):
+        z = side * (width / 2 - 0.022)
+        arms.tube([(0.0, 0.0, z), (-0.020, 0.025, z), (-0.043, 0.047, z)], 0.010, AXIS_Z)
+        brackets.tube([(-0.129, 0.120, z), (-0.152, 0.104, z), (*axis[:2], z)], 0.012, AXIS_Z)
+        brackets.beam((*axis[:2], z - 0.013), (*axis[:2], z + 0.013), 0.014)
+
+    # Positive rotation lowers the forward-facing surface. The last stop is
+    # a full half-turn, with the pad facing the ground beneath its own seat.
+    angles = (-6, 18, 44, 88, 180)
+    rest = mesh_node(doc, binary, name + "_Legrest", {"legrest_shell": tray, "legrest": pad, "legrest_arm": arms},
+                     translation=axis, rotation=rotation(AXIS_Z, angles[0]))
+    clip(doc, binary, name + "_legrest", [(rest, "rotation", ADJUSTMENT_STEPS, [rotation(AXIS_Z, a) for a in angles])])
+    mount = mesh_node(doc, binary, name + "_LegrestMount", {"legrest_arm": brackets})
+    return rest, mount
 
 
 MATERIALS = {
@@ -381,6 +390,7 @@ MATERIALS = {
     "width_adapter": ([0.63, 0.32, 0.105, 1.0], 0.26, 0.46),
     "legrest_shell": ([0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
     "legrest": ([0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
+    "legrest_arm": ([0.167, 0.223, 0.260, 1.0], 0.24, 0.58),
     "canopy": ([0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
     "canopy_trim": ([0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
     "canopy_stay": ([0.112, 0.177, 0.212, 1.0], 0.10, 0.60),
@@ -390,8 +400,7 @@ AXIS_Z = (0.0, 0.0, 1.0)
 BACK_PIVOT = (0.091, 0.163, 0.0)
 BACK_DEGREES = (95, 115, 135, 155, 175)
 BACK_ROTATIONS = tuple(106 - degrees for degrees in BACK_DEGREES)
-BACK_TIMES = (0, 0.25, 0.5, 0.75, 1)
-THREE_STEPS = (0.0, 0.5, 1.0)
+ADJUSTMENT_STEPS = (0, 0.25, 0.5, 0.75, 1)
 CANOPY_EYE = (0.222, 0.552)
 
 
@@ -519,14 +528,7 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
 
     bar = add_guardrail(doc, binary, name, base)
 
-    legs = {key: Geometry() for key in ("legrest_shell", "legrest")}
-    add_legrest(legs["legrest_shell"], legs["legrest"], rear)
-    leg_hinge = (-0.143, 0.109, 0.0)
-    legrest = mesh_node(doc, binary, name + "_Legrest", legs, origin=leg_hinge, translation=leg_hinge)
-    # The rear legrest has a fourth, under-seat position for front recline.
-    leg_angles = (0, -10, -20, 93) if rear else (0, -16, -32)
-    leg_times = (0, 0.25, 0.5, 1) if rear else THREE_STEPS
-    clip(doc, binary, name + "_legrest", [(legrest, "rotation", leg_times, [rotation(AXIS_Z, a) for a in leg_angles])])
+    legrest, legrest_mount = add_legrest(doc, binary, name, rear)
 
     moving_back = {key: Geometry() for key in ("shell", "upholstery")}
     moving_back["shell"].box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
@@ -538,8 +540,8 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
                        morphs=[shoulder_straps(a) for a in BACK_ROTATIONS[1:]])
     strap_weights = [(1.0 if key == target else 0.0,) for key in range(5) for target in range(1, 5)]
     back_tracks = [
-        (backrest, "rotation", BACK_TIMES, [rotation(AXIS_Z, a) for a in BACK_ROTATIONS]),
-        (straps, "weights", BACK_TIMES, strap_weights),
+        (backrest, "rotation", ADJUSTMENT_STEPS, [rotation(AXIS_Z, a) for a in BACK_ROTATIONS]),
+        (straps, "weights", ADJUSTMENT_STEPS, strap_weights),
     ]
     if rear:
         back_tracks.extend(handle_extension(doc, binary, level))
@@ -547,7 +549,7 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
 
     panel_drop = 0.0 if rear else FRONT_RECLINE_DROP
     seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP - panel_drop, 0.0),
-                     children=[bar, legrest, backrest, straps])
+                     children=[bar, legrest, legrest_mount, backrest, straps])
     mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
     add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z, panel_drop)
     angle, ground = level

@@ -708,7 +708,11 @@ const D02_COMPONENTS = [
     hints: ['闭合', '松开左侧，绕右侧转开', '松开右侧，绕左侧转开', '完全拆下']
   },
   { key: 'canopy', label: '顶篷', positions: ['收合', '1 档', '2 档', '3 档'], initial: 3 },
-  { key: 'legrest', label: '腿托', positions: ['1 · 低', '2 · 中', '3 · 高'], initial: 0 },
+  {
+    key: 'legrest', label: '腿托', initial: 0,
+    positions: ['1 微翘', '2', '3', '4', '5 反折'],
+    hints: ['1 档，微微上翘', '2 档', '3 档', '4 档', '5 档，反折到座舱底部']
+  },
   {
     key: 'backrest', label: '靠背', initial: 0,
     positions: ['95°', '115°', '135°', '155°', '175°'],
@@ -717,8 +721,7 @@ const D02_COMPONENTS = [
 ];
 const D02_FRONT_BACKREST = 'D02_Front_backrest';
 const D02_REAR_LEGREST = 'D02_Rear_legrest';
-const D02_BACKREST_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
-const D02_REAR_LEGREST_SAMPLES = [0, 0.25, 0.5, 1];
+const D02_FIVE_POSITION_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
 const d02ControlRows = new Map();
 let d02Mixer = null;
 let d02Loading = false;
@@ -736,7 +739,8 @@ function buildD02StateControls() {
 
     for (const component of D02_COMPONENTS) {
       const row = document.createElement('div');
-      row.className = component.key === 'backrest' ? 'flex items-center gap-1' : 'flex items-center gap-2';
+      const compactRow = component.positions.length === 5;
+      row.className = compactRow ? 'flex items-center gap-1' : 'flex items-center gap-2';
       row.setAttribute('role', 'group');
       row.setAttribute('aria-label', component.key === 'backrest' ? `${seatLabel}靠背与座垫夹角` : `${seatLabel}${component.label}`);
       const label = document.createElement('span');
@@ -754,7 +758,7 @@ function buildD02StateControls() {
         button.type = 'button';
         button.id = `d02-${seat.toLowerCase()}-${component.key}-${index}`;
         button.className = 'card-btn min-h-[28px] flex-1 px-0.5 rounded-lg text-[11px] font-medium';
-        if (component.key === 'backrest') button.classList.add('whitespace-nowrap', 'tabular-nums');
+        if (compactRow) button.classList.add('whitespace-nowrap', 'tabular-nums');
         button.textContent = position;
         const hint = component.hints?.[index];
         if (hint) {
@@ -786,18 +790,20 @@ function updateD02StateControls() {
   if (!showD02) return;
 
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
+  const rear = d02ControlRows.get(D02_REAR_LEGREST);
   const rearLegrestLocked = Boolean(d02ReclinePhase) || frontReclineNeedsStowedLegrest(front);
   let availablePositions = 0;
   let positionCount = 0;
   for (const control of d02ControlRows.values()) {
     const hasAction = control.variants ? control.variantActions.some(Boolean) : Boolean(control.action);
-    const selectedIndex = control.variants && !control.variantActions[control.index] ? 0 : control.index;
+    let selectedIndex = control.variants && !control.variantActions[control.index] ? 0 : control.index;
+    if (control === rear && rearLegrestLocked && d02ReclinePhase !== 'restoring') selectedIndex = control.buttons.length - 1;
     control.buttons.forEach((button, index) => {
       const available = hasAction && (!control.variants || index === 0 || Boolean(control.variantActions[index]));
       const selected = available && index === selectedIndex;
       positionCount++;
       if (available) availablePositions++;
-      button.disabled = d02Loading || !available || (control.name === D02_REAR_LEGREST && rearLegrestLocked);
+      button.disabled = d02Loading || !available || (control === rear && rearLegrestLocked);
       button.classList.toggle('card-active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -806,9 +812,9 @@ function updateD02StateControls() {
   const status = document.getElementById('d02-states-status');
   if (d02Loading) status.textContent = '正在载入可调状态…';
   else if (!availablePositions) status.textContent = '此模型暂未提供可调状态。';
-  else if (d02ReclinePhase === 'restoring') status.textContent = '后座腿托正在恢复所选档位。';
-  else if (d02ReclinePhase) status.textContent = '前座靠背正在调整，后座腿托暂时收起。';
-  else if (rearLegrestLocked) status.textContent = '前座后仰时，后座腿托保持收起以留出空间。';
+  else if (d02ReclinePhase === 'restoring') status.textContent = `后座腿托正在恢复到 ${rear.index + 1} 档。`;
+  else if (d02ReclinePhase) status.textContent = '前座靠背正在调整，后座腿托暂时收至 5 档。';
+  else if (rearLegrestLocked) status.textContent = '前座后仰时，后座腿托保持在 5 档反折位置，为靠背留出空间。';
   else if (availablePositions < positionCount) status.textContent = '此模型的部分动作暂不可用。';
   else status.textContent = '';
   const rearBackrest = d02ControlRows.get('D02_Rear_backrest');
@@ -819,10 +825,7 @@ function updateD02StateControls() {
 }
 
 function d02PositionTime(control) {
-  const sample = control.name === D02_REAR_LEGREST
-    ? D02_REAR_LEGREST_SAMPLES[control.index]
-    : control.index / (control.buttons.length - 1);
-  return control.action.getClip().duration * sample;
+  return control.action.getClip().duration * control.index / (control.buttons.length - 1);
 }
 
 function createD02Action(clip) {
@@ -850,7 +853,7 @@ function bindD02PoseModel(model, animations) {
   d02Loading = false;
   d02ReclinePhase = null;
   const clips = new Map(animations.map(clip => [clip.name, clip]));
-  const supportsStow = supportsD02RotationTimes(clips.get(D02_REAR_LEGREST), '_Legrest.quaternion', D02_REAR_LEGREST_SAMPLES);
+  const supportsStow = supportsD02RotationTimes(clips.get(D02_REAR_LEGREST), '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES);
   for (const [name, control] of d02ControlRows) {
     control.action = null;
     control.transition = null;
@@ -865,8 +868,9 @@ function bindD02PoseModel(model, animations) {
       }
     } else {
       const clip = clips.get(name);
-      if (!supportsStow && (name === D02_FRONT_BACKREST || name === D02_REAR_LEGREST)) continue;
-      if (name.endsWith('_backrest') && !supportsD02RotationTimes(clip, '_Backrest.quaternion', D02_BACKREST_SAMPLES)) continue;
+      if (name === D02_FRONT_BACKREST && !supportsStow) continue;
+      if (name.endsWith('_legrest') && !supportsD02RotationTimes(clip, '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES)) continue;
+      if (name.endsWith('_backrest') && !supportsD02RotationTimes(clip, '_Backrest.quaternion', D02_FIVE_POSITION_SAMPLES)) continue;
       control.action = createD02Action(clip);
       if (control.action) playD02Pose(control.action, d02PositionTime(control));
     }
