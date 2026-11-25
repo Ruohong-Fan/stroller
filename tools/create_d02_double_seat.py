@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import pathlib
 import struct
+from bisect import bisect_right
 
 from d02_front_mount import relocate_front_ports, relocate_high_ports
 from generate_wheel_variants import read_positions, write_glb
@@ -207,12 +208,8 @@ def dome_bow(crown, edge, half_width):
 # Center and side coordinates of the transverse bows from the fixed rear
 # seam along the roof. Each row lists center X/Y, side X/Y, and half width.
 CANOPY_REAR_BOW = (0.266, 0.637, 0.256, 0.581, 0.188)
-CANOPY_BOW_STOPS = (
+CANOPY_BOW_PATH = (
     (
-        (0.268, 0.623, 0.256, 0.577, 0.188), (0.271, 0.606, 0.257, 0.573, 0.189),
-        (0.272, 0.587, 0.258, 0.566, 0.190), (0.270, 0.564, 0.258, 0.556, 0.191),
-        (0.269, 0.541, 0.258, 0.545, 0.191),
-    ), (
         (0.269, 0.644, 0.256, 0.584, 0.189), (0.269, 0.651, 0.256, 0.590, 0.190),
         (0.265, 0.657, 0.254, 0.597, 0.191), (0.258, 0.661, 0.249, 0.605, 0.192),
         (0.250, 0.663, 0.244, 0.613, 0.191),
@@ -232,13 +229,11 @@ CANOPY_BOW_STOPS = (
         dome_bow((0.411, 0.269), (0.454, 0.132), 0.188),
     ),
 )
-CANOPY_BOWS_AT_RELEASE = (*CANOPY_BOW_STOPS[-1][:-1],
+CANOPY_BOWS_AT_RELEASE = (*CANOPY_BOW_PATH[-1][:-1],
                           dome_bow((0.439, 0.268), (0.459, 0.139), 0.189))
 
-# The shade stays rolled at the first four stops. In the fifth, the bows
-# carry the continuous rounded roof over the head and down to the chest.
-CANOPY_VISOR_STOPS = (
-    ((0.268, 0.536, 0.257, 0.540, 0.190),),
+# The shade is rolled in the early poses and extends to the chest at the end.
+CANOPY_VISOR_PATH = (
     ((0.246, 0.661, 0.242, 0.611, 0.190),),
     ((0.127, 0.707, 0.155, 0.636, 0.190),),
     ((-0.021, 0.677, 0.088, 0.627, 0.185),),
@@ -674,16 +669,37 @@ def hip_cover(angle):
     return textile_strip(sections)
 
 
+def canopy_motion(hem_centers):
+    # Time the clip by distance traveled at the center of the front hem.
+    # Keep the original geometry keys so the canopy follows the tested path.
+    traveled = [0.0]
+    for start, end in zip(hem_centers, hem_centers[1:]):
+        traveled.append(traveled[-1] + math.dist(start, end))
+    path_times = [distance / traveled[-1] for distance in traveled]
+    times = sorted(set(path_times) | set(ADJUSTMENT_STEPS))
+    morph_count = len(path_times) - 1
+    weights = []
+    for time in times[:-1]:
+        left = bisect_right(path_times, time) - 1
+        progress = (time - path_times[left]) / (path_times[left + 1] - path_times[left])
+        frame = [0.0] * morph_count
+        frame[left] = 1.0 - progress
+        if left + 1 < morph_count:
+            frame[left + 1] = progress
+        weights.extend((weight,) for weight in frame)
+    weights.extend([(0.0,)] * morph_count)
+    return times, weights
+
+
 def add_backrest_canopy(doc, binary, name):
-    # Both hinge housings are fixed to the upper shell. The canopy's fabric
-    # can deploy independently while inheriting the backrest's full rotation.
-    shapes = [canopy_geometry(bow, visor) for bow, visor in zip(CANOPY_BOW_STOPS, CANOPY_VISOR_STOPS)]
+    # The canopy deploys independently and inherits the backrest rotation.
+    path = list(zip(CANOPY_BOW_PATH, CANOPY_VISOR_PATH))
     # Bring the roof forward before letting out its hem. This keeps the
     # fourth rear legrest position clear while the front back is flat.
-    shapes.insert(-1, canopy_geometry(CANOPY_BOWS_AT_RELEASE, CANOPY_VISOR_FOLDED))
-    times = (*ADJUSTMENT_STEPS[:-1], 0.875, ADJUSTMENT_STEPS[-1])
+    path.insert(-1, (CANOPY_BOWS_AT_RELEASE, CANOPY_VISOR_FOLDED))
+    shapes = [canopy_geometry(bows, visor) for bows, visor in path]
+    times, weights = canopy_motion([visor[-1][:2] for _, visor in path])
     canopy = mesh_node(doc, binary, name + "_Canopy", shapes[-1], origin=BACK_PIVOT, morphs=shapes[:-1])
-    weights = [(float(stop == target),) for stop in range(len(shapes)) for target in range(len(shapes) - 1)]
     clip(doc, binary, name + "_canopy", [(canopy, "weights", times, weights)])
 
     hinges = Geometry()
@@ -765,7 +781,7 @@ def make_seat(doc, binary, name, anchor, level, rear=False):
     x, y = anchor
     extras = {"reversibleCabin": True}
     if not rear:
-        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=3)
+        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=2)
     root = mesh_node(doc, binary, name, mounts, children=[seat],
                      translation=(c*x - s*y, s*x + c*y - ground, 0.0),
                      rotation=rotation(AXIS_Z, math.degrees(angle)), extras=extras)
