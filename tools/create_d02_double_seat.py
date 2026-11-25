@@ -73,6 +73,41 @@ class Geometry:
         for face in faces:
             self.quad(*face)
 
+    def seat_pad(self, center, dims, corner, bevel, rear_rise):
+        """Round the seat in plan and blend the back edge up into the backrest."""
+        cx, cy, cz = center
+        dx, dy, dz = (v / 2 for v in dims)
+
+        def ring(level, inset):
+            points = []
+            for quadrant, (sx, sz) in enumerate(((1, 1), (-1, 1), (-1, -1), (1, -1))):
+                for step in range(7):
+                    angle = math.pi / 2 * (quadrant + step / 6)
+                    x = sx * (dx - corner) + (corner - inset) * math.cos(angle)
+                    z = sz * (dz - corner) + (corner - inset) * math.sin(angle)
+                    ramp = max(0.0, min(1.0, (x - dx + 0.075) / 0.075))
+                    rise = rear_rise * ramp**2 * (3 - 2 * ramp)
+                    points.append((cx + x, cy + level + rise, cz + z))
+            return points
+
+        rings = [
+            ring(-dy, bevel),
+            ring(-dy + bevel, 0.0),
+            ring(dy - bevel, 0.0),
+            ring(dy, bevel),
+        ]
+        for lower, upper in zip(rings, rings[1:]):
+            for i in range(len(lower)):
+                j = (i + 1) % len(lower)
+                self.quad(lower[i], upper[i], upper[j], lower[j])
+        # Span across the paired edges so the two cap surfaces follow the
+        # curved rear return, instead of running a diagonal through the rise.
+        for boundary, upper in ((rings[0], False), (rings[-1], True)):
+            end = len(boundary) - 1
+            for i in range((end - 1) // 2):
+                strip = (boundary[i], boundary[i + 1], boundary[end - i - 1], boundary[end - i])
+                self.quad(*(reversed(strip) if upper else strip))
+
     def beam(self, start, end, radius, sides=12):
         axis = unit(sub(end, start))
         ref = (0.0, 0.0, 1.0) if abs(axis[2]) < 0.9 else (0.0, 1.0, 0.0)
@@ -171,11 +206,11 @@ def add_canopy(fabric, trim, shell):
             trim.beam(hinge, row[edge], 0.006, sides=8)
 
 
-def add_side_mount(mount, latch, host_z):
+def add_side_mount(cheek, mount, latch, host_z):
     rail_angle = math.radians(37)
     for side in (-1, 1):
         # The center of this channel stays open for the existing host and rail.
-        mount.side_cheek(
+        cheek.side_cheek(
             [(-0.103, 0.142), (0.100, 0.160), (0.062, 0.084), (-0.039, 0.033)],
             side * (0.183 + host_z + 0.006) / 2,
             host_z + 0.006 - 0.183,
@@ -207,13 +242,13 @@ def add_legrest(support, pad, rear):
 
 def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
     groups = {name: Geometry() for name in (
-        "upholstery", "shell", "frame", "harness", "mounts",
+        "upholstery", "shell", "frame", "harness", "mount_cheek", "mounts", "mount_pin",
         "legrest_shell", "legrest", "canopy", "canopy_trim",
     )}
     soft, shell, frame, harness = (groups[name] for name in ("upholstery", "shell", "frame", "harness"))
 
-    shell.box((0.055, 0.115, 0.0), (0.43, 0.070, 0.394))
-    soft.box((0.045, 0.158, 0.0), (0.40, 0.045, 0.378))
+    shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
+    soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
     shell.box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
     soft.box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
 
@@ -233,7 +268,7 @@ def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
-    add_side_mount(groups["mounts"], frame, host_z)
+    add_side_mount(groups["mount_cheek"], groups["mounts"], groups["mount_pin"], host_z)
     add_legrest(groups["legrest_shell"], groups["legrest"], rear)
     add_canopy(groups["canopy"], groups["canopy_trim"], shell)
 
@@ -243,7 +278,9 @@ def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
         ("shell", [0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
         ("frame", [0.43, 0.49, 0.55, 1.0], 0.68, 0.34),
         ("harness", [0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
-        ("mounts", [0.070, 0.076, 0.084, 1.0], 0.10, 0.56),
+        ("mount_cheek", [0.155, 0.258, 0.310, 1.0], 0.08, 0.62),
+        ("mounts", [0.190, 0.415, 0.475, 1.0], 0.25, 0.40),
+        ("mount_pin", [0.740, 0.804, 0.833, 1.0], 0.52, 0.34),
         ("legrest_shell", [0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
         ("canopy", [0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
         ("canopy_trim", [0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
