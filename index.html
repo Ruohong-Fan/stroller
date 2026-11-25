@@ -452,12 +452,18 @@ const DOUBLE_CABINS = [
 // ============================================================================
 // 2. 状态管理与 CAD 缓存池
 // ============================================================================
+const MODE_ROUTE_NAMES = { single: 'single', double: 'double', none: 'frame', other: 'parts' };
+const CABIN_MODES = Object.keys(MODE_ROUTE_NAMES);
+const FRAME_WIDTHS = [380, 550, 650];
+const WHEEL_SIZES = Object.keys(WHEEL_SPECS);
+const CAMERA_VIEWS = ['iso', 'side', 'front', 'top'];
 const state = {
   cabinMode: 'single', // 'single' | 'double' | 'none'
   selectedId: 'S05',
   frameWidth: 550,
   wheelSize: 'M',
   postureState: 1,    // 1:安装完成, 2:折叠中, 3:折叠后站立, 4:拆车轮, 5:拆横杆, 6:均拆
+  cameraView: 'iso',
   showTray: false,
   cacheBust: Date.now()
 };
@@ -700,6 +706,7 @@ scene.add(strollerRoot);
 // ============================================================================
 // D02: sample the model's independent animation clips at discrete positions.
 // ============================================================================
+const D02_BACKREST_ANGLES = [95, 115, 135, 155, 175];
 const D02_COMPONENTS = [
   {
     key: 'guardrail', label: '护栏', initial: 0,
@@ -715,7 +722,7 @@ const D02_COMPONENTS = [
   },
   {
     key: 'backrest', label: '靠背', initial: 0,
-    positions: ['95°', '115°', '135°', '155°', '175°'],
+    positions: D02_BACKREST_ANGLES.map(angle => `${angle}°`),
     hints: ['95°，直立', null, null, null, '175°，接近平躺']
   }
 ];
@@ -951,6 +958,7 @@ function setD02Position(control, index) {
   else if (control.name === D02_FRONT_BACKREST) startD02FrontRecline(now);
   else startD02Transition(control, d02PositionTime(control), now);
   updateD02StateControls();
+  syncConfiguratorRoute();
 }
 
 function animateD02Poses(now) {
@@ -979,6 +987,7 @@ let renderToken = 0;
 
 async function updateScene() {
   const currentToken = ++renderToken;
+  syncConfiguratorRoute();
   d02Loading = true;
   updateD02StateControls();
   updateProductHeader();
@@ -1105,6 +1114,16 @@ function fitPreview() {
 // ============================================================================
 // 5. UI 交互与规格联动逻辑
 // ============================================================================
+function getCabinList(mode) {
+  if (mode === 'single') return SINGLE_CABINS;
+  if (mode === 'double') return DOUBLE_CABINS;
+  return [];
+}
+
+function getCabinSpec(mode, id) {
+  return getCabinList(mode).find(cabin => cabin.id === id);
+}
+
 function populateCabinSelect() {
   const select = document.getElementById('cabin-select');
   const wrap = document.getElementById('cabin-select-wrap');
@@ -1116,7 +1135,7 @@ function populateCabinSelect() {
   }
   wrap.classList.remove('hidden');
 
-  const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
+  const list = getCabinList(state.cabinMode);
   list.forEach(item => {
     const opt = document.createElement('option');
     const widthText = item.widths.map(w => w === 380 ? '380窄' : (w === 550 ? '550中' : '650宽')).join(' / ');
@@ -1133,7 +1152,7 @@ function populateCabinSelect() {
 
 function setCabinMode(mode) {
   state.cabinMode = mode;
-  ['single', 'double', 'none', 'other'].forEach(m => {
+  CABIN_MODES.forEach(m => {
     const btn = document.getElementById(`mode-${m}`);
     if (btn) btn.classList.toggle('seg-active', m === mode);
   });
@@ -1152,8 +1171,7 @@ function setCabinMode(mode) {
 
 function onCabinChange(id) {
   state.selectedId = id;
-  const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
-  const item = list.find(x => x.id === id);
+  const item = getCabinSpec(state.cabinMode, id);
 
   if (item && !item.widths.includes(state.frameWidth)) {
     setFrameWidth(item.widths[0], true);
@@ -1176,16 +1194,14 @@ function onCabinChange(id) {
 }
 
 function updateWidthButtonsAvailability() {
-  const list = state.cabinMode === 'single' ? SINGLE_CABINS : DOUBLE_CABINS;
-  const item = (state.cabinMode === 'single' || state.cabinMode === 'double')
-    ? list.find(x => x.id === state.selectedId)
-    : null;
+  const item = getCabinSpec(state.cabinMode, state.selectedId);
 
-  [380, 550, 650].forEach(w => {
+  FRAME_WIDTHS.forEach(w => {
     const btn = document.getElementById(`width-${w}`);
     const supported = !item || item.widths.includes(w);
     btn.classList.toggle('card-active', state.frameWidth === w);
     btn.classList.toggle('opacity-35', !supported);
+    btn.disabled = !supported;
   });
 
   const hint = document.getElementById('width-compat-hint');
@@ -1199,14 +1215,17 @@ function updateWidthButtonsAvailability() {
 }
 
 function setFrameWidth(w, skipSceneUpdate = false) {
+  const item = getCabinSpec(state.cabinMode, state.selectedId);
+  if (!FRAME_WIDTHS.includes(w) || (item && !item.widths.includes(w))) return;
   state.frameWidth = w;
   updateWidthButtonsAvailability();
   if (!skipSceneUpdate) updateScene();
 }
 
 function setWheelSize(size, skipSceneUpdate = false) {
+  if (!WHEEL_SIZES.includes(size)) return;
   state.wheelSize = size;
-  ['S', 'M', 'L'].forEach(s => {
+  WHEEL_SIZES.forEach(s => {
     document.getElementById(`wheel-${s}`).classList.toggle('card-active', s === size);
   });
   if (!skipSceneUpdate) updateScene();
@@ -1214,14 +1233,14 @@ function setWheelSize(size, skipSceneUpdate = false) {
 
 const CHASSIS_POSTURES = ['安装完成', '折叠中', '折叠后站立', '拆卸车轮', '拆卸横杆', '横杆与车轮均拆'];
 
-function setPosture(stateNum) {
+function setPosture(stateNum, skipSceneUpdate = false) {
   state.postureState = stateNum;
   for (let posture = 1; posture <= CHASSIS_POSTURES.length; posture++) {
     const button = document.getElementById(`posture-${posture}`);
     button.classList.toggle('card-active', posture === stateNum);
     button.setAttribute('aria-pressed', String(posture === stateNum));
   }
-  updateScene();
+  if (!skipSceneUpdate) updateScene();
 }
 
 function updateProductHeader(d02Model = null) {
@@ -1279,8 +1298,10 @@ function updateProductHeader(d02Model = null) {
   descriptionEl.hidden = !description;
 }
 
-function setCameraView(view) {
-  ['iso', 'side', 'front', 'top'].forEach(v => {
+function setCameraView(view, skipRouteUpdate = false) {
+  if (!CAMERA_VIEWS.includes(view)) return;
+  state.cameraView = view;
+  CAMERA_VIEWS.forEach(v => {
     const btn = document.getElementById(`cam-${v}`);
     if (btn) btn.classList.toggle('seg-active', v === view);
   });
@@ -1294,6 +1315,7 @@ function setCameraView(view) {
   camera.position.copy(sceneFocus).addScaledVector(direction, distance);
   controls.target.copy(sceneFocus);
   controls.update();
+  if (!skipRouteUpdate) syncConfiguratorRoute();
 }
 
 function resizePreview() {
@@ -1310,18 +1332,85 @@ const previewObserver = new ResizeObserver(resizePreview);
 previewObserver.observe(container);
 resizePreview();
 
-buildD02StateControls();
+// ============================================================================
+// 6. Configurator route: use the address as the source for a page refresh.
+// ============================================================================
+const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'view', 'front', 'rear', 'd02'];
 
-// A D02 review link can open a specific width and wheelset directly.
-const d02Preset = /^(550|650)([SML])$/.exec(new URLSearchParams(window.location.search).get('d02') || '');
-if (d02Preset) {
-  state.selectedId = 'D02';
-  setFrameWidth(Number(d02Preset[1]), true);
-  setWheelSize(d02Preset[2], true);
-  setCabinMode('double');
-} else {
-  setCabinMode('single');
+function d02PoseRouteValues(component) {
+  if (component.key === 'backrest') return D02_BACKREST_ANGLES;
+  const first = component.key === 'legrest' ? 1 : 0;
+  return component.positions.map((_, index) => index + first);
 }
+
+function d02PoseRoute(seat) {
+  // The rear legrest keeps the requested gear while the front backrest locks it folded.
+  return D02_COMPONENTS.map(component => {
+    const control = d02ControlRows.get(`D02_${seat}_${component.key}`);
+    return d02PoseRouteValues(component)[control.index];
+  }).join('-');
+}
+
+function restoreD02PoseRoute(seat, value) {
+  const positions = (value || '').split('-');
+  D02_COMPONENTS.forEach((component, index) => {
+    const choices = d02PoseRouteValues(component);
+    const selection = choices.findIndex(choice => String(choice) === positions[index]);
+    const control = d02ControlRows.get(`D02_${seat}_${component.key}`);
+    control.index = selection < 0 ? component.initial : selection;
+  });
+}
+
+function syncConfiguratorRoute() {
+  const url = new URL(window.location.href);
+  const query = url.searchParams;
+  ROUTE_PARAMETERS.forEach(parameter => query.delete(parameter));
+  query.set('mode', MODE_ROUTE_NAMES[state.cabinMode]);
+  if (getCabinSpec(state.cabinMode, state.selectedId)) query.set('cabin', state.selectedId);
+  query.set('width', String(state.frameWidth));
+  query.set('wheel', state.wheelSize);
+  if (state.cabinMode === 'none' || state.postureState !== 1) query.set('state', String(state.postureState));
+  query.set('view', state.cameraView);
+  if (state.cabinMode === 'double' && state.selectedId === 'D02') {
+    query.set('front', d02PoseRoute('Front'));
+    query.set('rear', d02PoseRoute('Rear'));
+  }
+  if (url.href !== window.location.href) window.history.replaceState(window.history.state, '', url.href);
+}
+
+function restoreConfiguratorRoute() {
+  const query = new URLSearchParams(window.location.search);
+  const legacy = /^(550|650)([SML])$/i.exec(query.get('d02') || '');
+  const modeName = query.get('mode')?.toLowerCase();
+  const cabinId = query.get('cabin')?.toUpperCase();
+  const modeForId = CABIN_MODES.find(mode => getCabinSpec(mode, cabinId));
+  const requestedMode = CABIN_MODES.find(mode => mode === modeName || MODE_ROUTE_NAMES[mode] === modeName);
+  const mode = requestedMode || modeForId || (legacy ? 'double' : 'single');
+  const defaultCabin = mode === 'double' && legacy ? 'D02' : 'S05';
+  const cabin = getCabinSpec(mode, cabinId) || getCabinSpec(mode, defaultCabin) || getCabinList(mode)[0];
+  const preset = cabin?.id === 'D02' ? legacy : null;
+  const width = FRAME_WIDTHS.find(value => String(value) === query.get('width')) || Number(preset?.[1]) || 550;
+  const wheel = query.get('wheel')?.toUpperCase();
+  const presetWheel = preset?.[2].toUpperCase();
+  const posture = query.get('state') || '';
+  const view = query.get('view')?.toLowerCase();
+
+  state.cabinMode = mode;
+  state.selectedId = cabin?.id || 'S05';
+  setFrameWidth(cabin && !cabin.widths.includes(width) ? cabin.widths[0] : width, true);
+  setWheelSize(WHEEL_SIZES.includes(wheel) ? wheel : (presetWheel || 'M'), true);
+  setPosture(/^[1-6]$/.test(posture) ? Number(posture) : 1, true);
+  if (cabin?.id === 'D02') {
+    restoreD02PoseRoute('Front', query.get('front'));
+    restoreD02PoseRoute('Rear', query.get('rear'));
+  }
+  setCameraView(CAMERA_VIEWS.includes(view) ? view : 'iso', true);
+  setCabinMode(mode);
+}
+
+buildD02StateControls();
+window.addEventListener('popstate', restoreConfiguratorRoute);
+restoreConfiguratorRoute();
 
 function animate(now = performance.now()) {
   requestAnimationFrame(animate);

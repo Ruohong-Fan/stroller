@@ -351,30 +351,102 @@ def add_guardrail(doc, binary, name, base):
     return removal
 
 
+def smoothstep(t):
+    t = min(1.0, max(0.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def textile_strip(sections):
+    """Make a thin, hemmed strip between rows in the seat's side plane."""
+    cloth = Geometry()
+    top, bottom = [], []
+    for x, y, half_width, nx, ny in sections:
+        top.append(((x, y, -half_width), (x, y, half_width)))
+        bottom.append(((x - 0.005 * nx, y - 0.005 * ny, -half_width),
+                       (x - 0.005 * nx, y - 0.005 * ny, half_width)))
+    for a, b, c, d in zip(top, top[1:], bottom, bottom[1:]):
+        cloth.quad(a[0], b[0], b[1], a[1])
+        cloth.quad(c[1], d[1], d[0], c[0])
+        cloth.quad(a[0], c[0], d[0], b[0])
+        cloth.quad(b[1], d[1], c[1], a[1])
+    cloth.quad(*top[0], *reversed(bottom[0]))
+    cloth.quad(*bottom[-1], *reversed(top[-1]))
+    return {"upholstery": cloth}
+
+
+def textile_motion(doc, binary, name, shape, positions):
+    # Subdivide the cover path so a seam follows the circular hinge motion
+    # between discrete stops, too. The rigid part keeps its own rotation track.
+    subdivisions = 8
+    angles = [a + (b - a) * step / subdivisions
+              for a, b in zip(positions, positions[1:]) for step in range(subdivisions)] + [positions[-1]]
+    frames = [shape(angle) for angle in angles]
+    node = mesh_node(doc, binary, name, frames[0], morphs=frames[1:])
+    steps = len(frames) - 1
+    weights = [(float(i == j),) for i in range(steps + 1) for j in range(1, steps + 1)]
+    return node, (node, "weights", tuple(i / steps for i in range(steps + 1)), weights)
+
+
+def knee_cover(angle, half_width):
+    # The visible fabric feeds out from beneath the front cushion lip. Its
+    # outer wrap goes around the front of the axle throughout the full fold.
+    x, y, _ = LEG_AXIS
+    seat = (-0.138 - x, 0.180 - y)
+    deck = (-0.045, 0.068)
+    start = math.atan2(seat[1], seat[0])
+    end = math.atan2(deck[1], deck[0]) + math.radians(angle)
+    start_radius, end_radius = math.hypot(*seat), math.hypot(*deck)
+    fold = smoothstep((angle - 110) / 70)
+    pleat = smoothstep((angle - 136) / 34)
+    wrap_radius = 0.076 - fold * 0.041
+    sections = []
+    for i in range(17):
+        t = i / 16
+        theta = start + (end - start) * t
+        c, s = math.cos(theta), math.sin(theta)
+        r = wrap_radius + (start_radius - wrap_radius) * smoothstep(1 - t * 3)
+        r += (end_radius - wrap_radius) * smoothstep(t * 3 - 2)
+        width = 0.164 + (half_width - 0.164) * smoothstep(t)
+        sides = smoothstep((t - 0.37) / 0.18) * smoothstep((0.96 - t) / 0.12)
+        width -= 0.043 * pleat * sides
+        # The lower portion tucks rearward into the fold as the footrest inverts.
+        tuck = 0.033 * fold * math.sin(math.pi * max(0.0, 2 * t - 1))
+        sections.append((x + r * c + tuck, y + r * s, width, c, s))
+    return textile_strip(sections)
+
+
 def add_legrest(doc, binary, name, rear):
     # The offset arms bring the pad up to the seat lip when deployed and
     # carry it below the chassis cross tube when inverted under the seat.
-    axis = (-0.173, 0.087, 0.0)
+    axis = LEG_AXIS
     length, width = (0.152, 0.292) if rear else (0.173, 0.304)
     center_x = -0.018 - length / 2
     tray, pad, arms, brackets = Geometry(), Geometry(), Geometry(), Geometry()
     # The tapered toe clears the front tires as the casters turn beneath it.
-    tray.seat_pad((center_x, 0.050, 0), (length, 0.018, width), 0.022, 0.004, 0, front_width=0.214)
+    # Recess the hard shell at the hinge end to leave a pocket for the fold.
+    hinge_inset = 0.022
+    shell_width = width - (width - 0.214) * hinge_inset / length
+    tray.seat_pad((center_x - hinge_inset / 2, 0.050, 0), (length - hinge_inset, 0.018, shell_width),
+                  0.022, 0.004, 0, front_width=0.214)
     pad.seat_pad((center_x, 0.060, 0), (length - 0.012, 0.013, width - 0.020), 0.018, 0.003, 0, front_width=0.194)
     for side in (-1, 1):
         z = side * (width / 2 - 0.022)
         arms.tube([(0.0, 0.0, z), (-0.020, 0.025, z), (-0.043, 0.047, z)], 0.010, AXIS_Z)
         brackets.tube([(-0.129, 0.120, z), (-0.152, 0.104, z), (*axis[:2], z)], 0.012, AXIS_Z)
         brackets.beam((*axis[:2], z - 0.013), (*axis[:2], z + 0.013), 0.014)
+        brackets.beam((*axis[:2], z + side * 0.012), (*axis[:2], z + side * 0.019), 0.023, sides=20)
 
     # Positive rotation lowers the forward-facing surface. The last stop is
     # a full half-turn, with the pad facing the ground beneath its own seat.
     angles = (-6, 18, 44, 88, 180)
-    rest = mesh_node(doc, binary, name + "_Legrest", {"legrest_shell": tray, "legrest": pad, "legrest_arm": arms},
+    rest = mesh_node(doc, binary, name + "_Legrest", {"legrest_shell": tray, "upholstery": pad, "legrest_arm": arms},
                      translation=axis, rotation=rotation(AXIS_Z, angles[0]))
-    clip(doc, binary, name + "_legrest", [(rest, "rotation", ADJUSTMENT_STEPS, [rotation(AXIS_Z, a) for a in angles])])
+    knee, cover_track = textile_motion(doc, binary, name + "_KneeCover", lambda angle: knee_cover(angle, width / 2 - 0.024), angles)
+    clip(doc, binary, name + "_legrest", [
+        (rest, "rotation", ADJUSTMENT_STEPS, [rotation(AXIS_Z, a) for a in angles]), cover_track,
+    ])
     mount = mesh_node(doc, binary, name + "_LegrestMount", {"legrest_arm": brackets})
-    return rest, mount
+    return rest, mount, knee
 
 
 MATERIALS = {
@@ -389,7 +461,6 @@ MATERIALS = {
     "mount_pin": ([0.740, 0.804, 0.833, 1.0], 0.52, 0.34),
     "width_adapter": ([0.63, 0.32, 0.105, 1.0], 0.26, 0.46),
     "legrest_shell": ([0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
-    "legrest": ([0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
     "legrest_arm": ([0.167, 0.223, 0.260, 1.0], 0.24, 0.58),
     "canopy": ([0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
     "canopy_trim": ([0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
@@ -397,6 +468,7 @@ MATERIALS = {
 }
 AXIS_X = (1.0, 0.0, 0.0)
 AXIS_Z = (0.0, 0.0, 1.0)
+LEG_AXIS = (-0.173, 0.087, 0.0)
 BACK_PIVOT = (0.091, 0.163, 0.0)
 BACK_DEGREES = (95, 115, 135, 155, 175)
 BACK_ROTATIONS = tuple(106 - degrees for degrees in BACK_DEGREES)
@@ -467,8 +539,35 @@ def shoulder_straps(angle):
         shoulder = follow_back((0.128, 0.535, side * 0.097))
         lower = follow_back((0.066, 0.320, side * 0.068))
         harness.beam(shoulder, lower, 0.009, sides=8)
-        harness.beam(lower, (-0.063, 0.198, side * 0.012), 0.009, sides=8)
+        buckle = (-0.063, 0.198, side * 0.012)
+        lift = 0.036 * smoothstep((-angle - 34) / 35)
+        points = [lower]
+        for t, rise in ((0.28, lift), (0.56, lift * 0.8)):
+            x, y, z = (a + (b - a) * t for a, b in zip(lower, buckle))
+            points.append((x, y + rise, z))
+        harness.tube([*points, buckle], 0.009, AXIS_Z)
     return {"harness": harness}
+
+
+def hip_cover(angle):
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    x, y = 0.043 - BACK_PIVOT[0], 0.241 - BACK_PIVOT[1]
+    end = (BACK_PIVOT[0] + x * c - y * s, BACK_PIVOT[1] + x * s + y * c)
+    tilt = math.radians(16 - angle)
+    direction = (math.sin(tilt), math.cos(tilt))
+    normal = (-direction[1], direction[0])
+    start = (0.049, 0.184)
+    lead = (start[0] + (end[0] - start[0]) * 0.35, start[1] + 0.003)
+    last = tuple(v - t * 0.029 for v, t in zip(end, direction))
+    sections = []
+    for i in range(13):
+        t = i / 12
+        u = 1 - t
+        px, py = (a * u**3 + 3 * b * t * u**2 + 3 * d * t**2 * u + e * t**3
+                  for a, b, d, e in zip(start, lead, last, end))
+        nx, ny, _ = unit((normal[0] * t, u + normal[1] * t, 0))
+        sections.append((px, py, 0.170, nx, ny))
+    return textile_strip(sections)
 
 
 def add_backrest_canopy(doc, binary, name):
@@ -523,12 +622,13 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
     for side in (-1, 1):
         soft.box((0.009, 0.199, side * 0.177), (0.180, 0.037, 0.027), math.radians(7))
         harness.beam((0.026, 0.195, side * 0.180), (-0.063, 0.198, side * 0.012), 0.009, sides=8)
+        shell.beam((*BACK_PIVOT[:2], side * 0.199), (*BACK_PIVOT[:2], side * 0.203), 0.026, sides=20)
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
     bar = add_guardrail(doc, binary, name, base)
 
-    legrest, legrest_mount = add_legrest(doc, binary, name, rear)
+    legrest, legrest_mount, knee = add_legrest(doc, binary, name, rear)
 
     moving_back = {key: Geometry() for key in ("shell", "upholstery")}
     moving_back["shell"].box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
@@ -538,10 +638,12 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
                          rotation=rotation(AXIS_Z, BACK_ROTATIONS[0]), children=canopy_nodes)
     straps = mesh_node(doc, binary, name + "_ShoulderStraps", shoulder_straps(BACK_ROTATIONS[0]),
                        morphs=[shoulder_straps(a) for a in BACK_ROTATIONS[1:]])
+    hip, hip_track = textile_motion(doc, binary, name + "_HipCover", hip_cover, BACK_ROTATIONS)
     strap_weights = [(1.0 if key == target else 0.0,) for key in range(5) for target in range(1, 5)]
     back_tracks = [
         (backrest, "rotation", ADJUSTMENT_STEPS, [rotation(AXIS_Z, a) for a in BACK_ROTATIONS]),
         (straps, "weights", ADJUSTMENT_STEPS, strap_weights),
+        hip_track,
     ]
     if rear:
         back_tracks.extend(handle_extension(doc, binary, level))
@@ -549,7 +651,7 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
 
     panel_drop = 0.0 if rear else FRONT_RECLINE_DROP
     seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP - panel_drop, 0.0),
-                     children=[bar, legrest, legrest_mount, backrest, straps])
+                     children=[bar, legrest, legrest_mount, knee, backrest, straps, hip])
     mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
     add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z, panel_drop)
     angle, ground = level
