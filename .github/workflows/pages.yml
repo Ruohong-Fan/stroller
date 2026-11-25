@@ -45,6 +45,8 @@ jobs:
         run: |
           for attempt in {1..12}; do
             if [[ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$PAGES_ARTIFACT" --jq ".artifacts | any(.id == $PAGES_ARTIFACT_ID and (.expired | not))")" == true ]]; then
+              # Pages resolves the artifact through a separate service.
+              sleep 20
               exit 0
             fi
             sleep 3
