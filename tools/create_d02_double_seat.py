@@ -389,6 +389,7 @@ BACK_DEGREES = (95, 115, 135, 155, 175)
 BACK_ROTATIONS = tuple(106 - degrees for degrees in BACK_DEGREES)
 BACK_TIMES = (0, 0.25, 0.5, 0.75, 1)
 THREE_STEPS = (0.0, 0.5, 1.0)
+CANOPY_EYE = (0.152, 0.330, 0.0)
 
 
 def add_node(doc, **node):
@@ -458,6 +459,56 @@ def shoulder_straps(angle):
     return {"harness": harness}
 
 
+def canopy_link_geometry(eye):
+    x, y, _ = eye
+    dx, dy = x - CANOPY_EYE[0], y - CANOPY_EYE[1]
+    stay = Geometry()
+    for side in (-1, 1):
+        stay.tube([(a, b, side * z) for a, b, z in (
+            (0.006, 0.171, 0.191), (0.006, 0.213, 0.191), (0.029, 0.240, 0.215),
+            (0.087 + dx / 2, 0.270 + dy / 2, 0.220), (x, y, 0.221),
+        )], 0.010, AXIS_Z)
+    return {"canopy_stay": stay}
+
+
+def add_linked_canopy(doc, binary, name, rear):
+    # The link has different travel on the two seats: the front canopy must
+    # stay out of the adjacent seat's guardrail and legrest envelope.
+    pivot = CANOPY_EYE if rear else (0.152, 0.780, 0.0)
+    travel = (0.025, -0.015, 0.0) if rear else (0.008, 0.0, 0.0)
+    angle = -18 if rear else -20
+    canopy = mesh_node(doc, binary, name + "_Canopy", canopy_geometry(1.0), origin=pivot, morphs=[
+        canopy_geometry(0), canopy_geometry(1 / 3, 0.115), canopy_geometry(2 / 3, 0.060)
+    ])
+    weights = [(w,) for w in (1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
+    clip(doc, binary, name + "_canopy", [(canopy, "weights", (0, 1 / 3, 2 / 3, 1), weights)])
+
+    hinges = Geometry()
+    x, y, _ = CANOPY_EYE
+    for side in (-1, 1):
+        hinges.beam((x, y, side * 0.205), (x, y, side * 0.237), 0.031)
+    hinge_node = mesh_node(doc, binary, name + "_CanopyHinges", {"canopy_stay": hinges}, origin=pivot)
+    carrier = add_node(doc, name=name + "_CanopyCarrier", translation=pivot, children=[canopy, hinge_node])
+
+    eyes, positions, rotations = [], [], []
+    hx, hy, _ = sub(CANOPY_EYE, pivot)
+    for t in BACK_TIMES:
+        a = math.radians(angle * t)
+        c, s = math.cos(a), math.sin(a)
+        position = tuple(p + d * t for p, d in zip(pivot, travel))
+        eyes.append((position[0] + c * hx - s * hy, position[1] + s * hx + c * hy, 0.0))
+        positions.append(position)
+        rotations.append(rotation(AXIS_Z, angle * t))
+    link = mesh_node(doc, binary, name + "_CanopyStay", canopy_link_geometry(CANOPY_EYE),
+                     morphs=[canopy_link_geometry(eye) for eye in eyes[1:]])
+    link_weights = [(1.0 if key == target else 0.0,) for key in range(5) for target in range(1, 5)]
+    return (carrier, link), [
+        (carrier, "rotation", BACK_TIMES, rotations),
+        (carrier, "translation", BACK_TIMES, positions),
+        (link, "weights", BACK_TIMES, link_weights),
+    ]
+
+
 def handle_extension(doc, binary, level):
     """Telescoping handle motion keyed ahead of the deep rear recline."""
     angle, _ = level
@@ -485,29 +536,19 @@ def handle_extension(doc, binary, level):
 
 
 def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
-    base = {key: Geometry() for key in ("upholstery", "shell", "guard_dock", "harness", "guard_release", "canopy_stay")}
+    base = {key: Geometry() for key in ("upholstery", "shell", "guard_dock", "harness", "guard_release")}
     soft, shell, harness = (base[key] for key in ("upholstery", "shell", "harness"))
     soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
     shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
     for side in (-1, 1):
         soft.box((0.009, 0.199, side * 0.177), (0.180, 0.037, 0.027), math.radians(7))
         harness.beam((0.026, 0.195, side * 0.180), (-0.063, 0.198, side * 0.012), 0.009, sides=8)
-        stay = base["canopy_stay"]
-        stay.tube([(x, y, side * z) for x, y, z in (
-            (0.006, 0.171, 0.191), (0.006, 0.213, 0.191), (0.029, 0.240, 0.215),
-            (0.087, 0.270, 0.220), (0.152, 0.330, 0.221),
-        )], 0.010, AXIS_Z)
-        stay.beam((0.152, 0.330, side * 0.205), (0.152, 0.330, side * 0.237), 0.031)
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
     bar = add_guardrail(doc, binary, name, base)
 
-    canopy = mesh_node(doc, binary, name + "_Canopy", canopy_geometry(1.0), morphs=[
-        canopy_geometry(0), canopy_geometry(1 / 3, 0.115), canopy_geometry(2 / 3, 0.060)
-    ])
-    weights = [(w,) for w in (1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
-    clip(doc, binary, name + "_canopy", [(canopy, "weights", (0, 1 / 3, 2 / 3, 1), weights)])
+    canopy_nodes, canopy_tracks = add_linked_canopy(doc, binary, name, rear)
 
     legs = {key: Geometry() for key in ("legrest_shell", "legrest")}
     add_legrest(legs["legrest_shell"], legs["legrest"], rear)
@@ -530,13 +571,14 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
         (backrest, "rotation", BACK_TIMES, [rotation(AXIS_Z, a) for a in BACK_ROTATIONS]),
         (straps, "weights", BACK_TIMES, strap_weights),
     ]
+    back_tracks.extend(canopy_tracks)
     if rear:
         back_tracks.extend(handle_extension(doc, binary, level))
     clip(doc, binary, name + "_backrest", back_tracks)
 
     panel_drop = 0.0 if rear else FRONT_RECLINE_DROP
     seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP - panel_drop, 0.0),
-                     children=[bar, canopy, legrest, backrest, straps])
+                     children=[bar, *canopy_nodes, legrest, backrest, straps])
     mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
     add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z, panel_drop)
     angle, ground = level
