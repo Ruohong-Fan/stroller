@@ -219,9 +219,28 @@ CANOPY_BOW_STOPS = (
     ),
 )
 
+# The blackout panel is sewn under the leading bow. It stays rolled at
+# the first four stops and feeds down over the shoulders at the fifth.
+CANOPY_VISOR_STOPS = (
+    ((0.268, 0.536, 0.257, 0.540, 0.190),),
+    ((0.246, 0.661, 0.242, 0.611, 0.190),),
+    ((0.127, 0.707, 0.155, 0.636, 0.190),),
+    ((-0.021, 0.677, 0.088, 0.627, 0.185),),
+    ((0.020, 0.680, 0.070, 0.611, 0.185),
+     (0.035, 0.617, 0.065, 0.600, 0.185),
+     (0.026, 0.600, 0.060, 0.582, 0.186),
+     (-0.062, 0.380, 0.078, 0.365, 0.186)),
+)
+CANOPY_VISOR_FOLDED = (
+    (0.020, 0.684, 0.074, 0.630, 0.185),
+    (0.043, 0.684, 0.078, 0.630, 0.185),
+    (0.062, 0.683, 0.080, 0.630, 0.185),
+    (0.084, 0.683, 0.081, 0.630, 0.185),
+)
 
-def canopy_geometry(stop):
-    bows = [CANOPY_REAR_BOW, *CANOPY_BOW_STOPS[stop]]
+
+def canopy_geometry(bow_stop, visor_bows):
+    bows = [CANOPY_REAR_BOW, *bow_stop]
     fabric, trim = Geometry(), Geometry()
 
     def arch(bow):
@@ -232,6 +251,10 @@ def canopy_geometry(stop):
             height = math.sin(theta) ** 0.52
             points.append((sx + (cx - sx) * height, sy + (cy - sy) * height, -half_width * math.cos(theta)))
         return points
+
+    def join_rows(rear, leading):
+        for j in range(len(rear) - 1):
+            fabric.quad(rear[j], leading[j], leading[j + 1], rear[j + 1])
 
     rows = [arch(bows[0])]
     for i, (left, right) in enumerate(zip(bows, bows[1:])):
@@ -247,11 +270,31 @@ def canopy_geometry(stop):
                 for w, x, y, z in zip(before, left, right, after)
             ]))
 
+    # The center binding enters the top cap of the backrest. Its ends
+    # turn down into the two shoulders, underneath the fabric side seams.
+    binding = []
+    for j in range(len(rows[0])):
+        across = -math.cos(math.pi * j / (len(rows[0]) - 1))
+        shoulder = abs(across) ** 6
+        binding.append((0.214 + 0.012 * shoulder, 0.596 - 0.029 * shoulder, 0.196 * across))
+    join_rows(binding, rows[0])
     for back, front in zip(rows, rows[1:]):
-        for j in range(len(back) - 1):
-            fabric.quad(back[j], front[j], front[j + 1], back[j + 1])
+        join_rows(back, front)
 
-    for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[20], 0.003), (rows[-1], 0.007)):
+    # The unused material rolls into the front binding at partial stops.
+    if len(visor_bows) == 1:
+        end = visor_bows[0]
+        lead = bows[-1]
+        visor_bows = [
+            tuple(a + (b - a) * t for a, b in zip(lead, end))
+            for t in (0.25, 0.5, 0.75, 1)
+        ]
+    visor_rows = [rows[-1], *map(arch, visor_bows)]
+    for back, front in zip(visor_rows, visor_rows[1:]):
+        join_rows(back, front)
+
+    for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[20], 0.003),
+                        (rows[-1], 0.007), (visor_rows[-1], 0.003)):
         trim.tube(row, radius, (1.0, 0.0, 0.0))
     for side, edge in ((-1, 0), (1, -1)):
         hinge = (*CANOPY_EYE, side * 0.1997)
@@ -262,6 +305,16 @@ def canopy_geometry(stop):
         forward = smoothstep((0.240 - end[0]) / 0.105)
         guide = (0.256 - 0.121 * forward, 0.598 + 0.027 * forward, side * 0.1997)
         trim.tube([hinge, elbow, guide, end], 0.0025, AXIS_Z)
+        # A continuous side gusset closes the path to the backrest.
+        # Its roots stay under the finished side edge of the shell.
+        shoulder = (0.202, 0.485, side * 0.196)
+        border = [row[edge] for row in rows + visor_rows[1:]]
+        for j, (a, b) in enumerate(zip(border, border[1:])):
+            t, u = j / (len(border) - 1), (j + 1) / (len(border) - 1)
+            root_a = tuple(x + (y - x) * t for x, y in zip(binding[edge], shoulder))
+            root_b = tuple(x + (y - x) * u for x, y in zip(binding[edge], shoulder))
+            fabric.quad(root_a, a, b, root_b)
+        trim.tube([shoulder, *[row[edge] for row in reversed(visor_rows)]], 0.0025, AXIS_Z)
     return {"canopy": fabric, "canopy_trim": trim}
 
 
@@ -602,10 +655,14 @@ def hip_cover(angle):
 def add_backrest_canopy(doc, binary, name):
     # Both hinge housings are fixed to the upper shell. The canopy's fabric
     # can deploy independently while inheriting the backrest's full rotation.
-    shapes = [canopy_geometry(stop) for stop in range(len(CANOPY_BOW_STOPS))]
+    shapes = [canopy_geometry(bow, visor) for bow, visor in zip(CANOPY_BOW_STOPS, CANOPY_VISOR_STOPS)]
+    # Open the leading bow first. The visor then unfurls beneath it, keeping
+    # the fourth rear legrest position clear while the front back is flat.
+    shapes.insert(-1, canopy_geometry(CANOPY_BOW_STOPS[-1], CANOPY_VISOR_FOLDED))
+    times = (*ADJUSTMENT_STEPS[:-1], 0.875, ADJUSTMENT_STEPS[-1])
     canopy = mesh_node(doc, binary, name + "_Canopy", shapes[-1], origin=BACK_PIVOT, morphs=shapes[:-1])
     weights = [(float(stop == target),) for stop in range(len(shapes)) for target in range(len(shapes) - 1)]
-    clip(doc, binary, name + "_canopy", [(canopy, "weights", ADJUSTMENT_STEPS, weights)])
+    clip(doc, binary, name + "_canopy", [(canopy, "weights", times, weights)])
 
     hinges = Geometry()
     x, y = CANOPY_EYE
