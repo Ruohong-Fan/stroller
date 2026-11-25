@@ -523,7 +523,7 @@ function updateHeaderStatus() {
     text.textContent = '正在加载 GitHub 模型文件...';
   } else if (loadedCount > 0) {
     dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
-    text.textContent = `已成功加载 ${loadedCount} 个真实 CAD 模型`;
+    text.textContent = `已加载 ${loadedCount} 个模型文件`;
   } else {
     dot.className = 'w-2 h-2 rounded-full bg-zinc-400';
     text.textContent = '等待在对应文件夹放入 GLB/STEP 模型';
@@ -541,7 +541,16 @@ function getNoCabinCacheKey() {
 }
 
 function getCabinCacheKey(mode, id) {
-  return `${mode}_${id}_w${state.frameWidth}_s${state.postureState}_wheel_${state.wheelSize}`;
+  return `${mode}_${id}_w${state.frameWidth}_s${getCabinPosture(id)}_wheel_${state.wheelSize}`;
+}
+
+function getCabinPosture(id) {
+  // D02 is available as an assembled model on both widths and all wheelsets.
+  return id === 'D02' ? 1 : state.postureState;
+}
+
+function getCabinPaths(mode, id) {
+  return MODEL_MANIFEST.cabinPaths(`${mode}_cabin`, id, state.frameWidth, getCabinPosture(id), state.wheelSize);
 }
 
 // ============================================================================
@@ -640,7 +649,7 @@ async function updateScene() {
       if (spec) {
         const cabinModel = await loadCadAsset(
           getCabinCacheKey('single', spec.id),
-          MODEL_MANIFEST.cabinPaths('single_cabin', spec.id, state.frameWidth, state.postureState, state.wheelSize)
+          getCabinPaths('single', spec.id)
         );
         if (currentToken !== renderToken) return;
         if (cabinModel) nextGroup.add(cabinModel);
@@ -650,7 +659,7 @@ async function updateScene() {
       if (dSpec) {
         const doubleModel = await loadCadAsset(
           getCabinCacheKey('double', dSpec.id),
-          MODEL_MANIFEST.cabinPaths('double_cabin', dSpec.id, state.frameWidth, state.postureState, state.wheelSize)
+          getCabinPaths('double', dSpec.id)
         );
         if (currentToken !== renderToken) return;
 
@@ -815,12 +824,12 @@ function setFrameWidth(w, skipSceneUpdate = false) {
   if (!skipSceneUpdate) updateScene();
 }
 
-function setWheelSize(size) {
+function setWheelSize(size, skipSceneUpdate = false) {
   state.wheelSize = size;
   ['S', 'M', 'L'].forEach(s => {
     document.getElementById(`wheel-${s}`).classList.toggle('card-active', s === size);
   });
-  updateScene();
+  if (!skipSceneUpdate) updateScene();
 }
 
 function setPosture(stateNum) {
@@ -898,7 +907,7 @@ function updateInfoPanel() {
     document.getElementById('spec-desc').textContent = s.desc;
     pathEl.textContent = isLoaded
       ? `已加载: ${cached.foundPath}`
-      : `查找路径: ${MODEL_MANIFEST.cabinPaths('single_cabin', s.id, state.frameWidth, state.postureState, state.wheelSize).map(path => `models/${path}`).join('、')}`;
+      : `查找路径: ${getCabinPaths('single', s.id).map(path => `models/${path}`).join('、')}`;
     badgeEl.textContent = isLoaded ? `✓ 单舱CAD` : '等待上传';
     badgeEl.className = isLoaded
       ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
@@ -907,19 +916,24 @@ function updateInfoPanel() {
     const d = DOUBLE_CABINS.find(x => x.id === state.selectedId);
     const cached = cadAssetCache.get(getCabinCacheKey('double', d.id));
     const isLoaded = cached && cached.status === 'loaded';
+    const isD02 = d.id === 'D02';
 
     document.getElementById('spec-code').textContent = d.id;
     document.getElementById('spec-posture').textContent = `${d.portLabel} 接口`;
     document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = d.name;
-    const conceptNote = (d.id === 'D02' && state.frameWidth === 550 && state.wheelSize === 'M')
-      ? ' 座舱侧面一体成型卡座为概念设计，车架沿用 CAD。'
+    const conceptNote = isD02 && isLoaded
+      ? ' 两座均配有腿托、顶篷和侧面一体式卡座。座舱为概念设计，车架沿用 CAD。'
       : '';
+    if (isD02 && isLoaded) {
+      const modelSize = new THREE.Box3().setFromObject(cached.group).getSize(new THREE.Vector3());
+      document.getElementById('spec-total-width').textContent = `约 ${Math.round(modelSize.z)} mm (${wheelSpec.name})`;
+    }
     document.getElementById('spec-desc').textContent = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。${conceptNote}`;
     pathEl.textContent = isLoaded
       ? `已加载: ${cached.foundPath}`
-      : `查找路径: ${MODEL_MANIFEST.cabinPaths('double_cabin', d.id, state.frameWidth, state.postureState, state.wheelSize).map(path => `models/${path}`).join('、')}`;
-    badgeEl.textContent = isLoaded ? `✓ 双舱CAD` : '等待上传';
+      : `查找路径: ${getCabinPaths('double', d.id).map(path => `models/${path}`).join('、')}`;
+    badgeEl.textContent = isLoaded ? (isD02 ? '✓ 双舱概念模型' : '✓ 双舱CAD') : '等待上传';
     badgeEl.className = isLoaded
       ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
       : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
@@ -933,9 +947,10 @@ function setCameraView(view) {
   });
   const distance = camera.position.distanceTo(controls.target) || 2600;
   const direction = new THREE.Vector3();
+  const frontAlongNegativeX = state.cabinMode === 'none' || (state.cabinMode === 'double' && state.selectedId === 'D02');
   if (view === 'iso') direction.set(-1550, 560, 1650).normalize();
-  if (view === 'side') direction.set(1, 0.025, 0);
-  if (view === 'front') direction.set(0, 0.05, 1);
+  if (view === 'side') direction.set(frontAlongNegativeX ? 0 : 1, 0, frontAlongNegativeX ? 1 : 0);
+  if (view === 'front') direction.set(frontAlongNegativeX ? -1 : 0, 0, frontAlongNegativeX ? 0 : 1);
   if (view === 'top') direction.set(0, 1, 0.005);
   camera.position.copy(sceneFocus).addScaledVector(direction, distance);
   controls.target.copy(sceneFocus);
@@ -948,12 +963,16 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// 初始化
-const postureSec = document.getElementById('posture-label').closest('section');
-if (postureSec) postureSec.style.display = 'none'; // 默认单舱模式下隐藏纯车架姿态栏
-
-populateCabinSelect();
-onCabinChange('S05');
+// A D02 review link can open a specific width and wheelset directly.
+const d02Preset = /^(550|650)([SML])$/.exec(new URLSearchParams(window.location.search).get('d02') || '');
+if (d02Preset) {
+  state.selectedId = 'D02';
+  setFrameWidth(Number(d02Preset[1]), true);
+  setWheelSize(d02Preset[2], true);
+  setCabinMode('double');
+} else {
+  setCabinMode('single');
+}
 
 function animate() {
   requestAnimationFrame(animate);

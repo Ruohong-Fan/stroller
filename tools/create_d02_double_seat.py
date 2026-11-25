@@ -1,56 +1,17 @@
 #!/usr/bin/env python3
-"""Build a first D02 double-child-seat concept GLB from the 550/M chassis."""
+"""Build the six assembled D02 double-child-seat concept GLBs."""
 
 from __future__ import annotations
 
-import json
 import math
 import pathlib
 import struct
 
-from generate_wheel_variants import compact_active_scene
+from generate_wheel_variants import write_glb
+from prepare_d02_chassis import prepare_chassis, level_assembly
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "models/no_cabin/w550_state1_wheel_M.glb"
-OUTPUT = ROOT / "models/double_cabin/D02_w550_state1_wheel_M.glb"
-
-
-def read_glb(path: pathlib.Path) -> tuple[dict, bytearray]:
-    raw = path.read_bytes()
-    magic, version, length = struct.unpack_from("<4sII", raw, 0)
-    if magic != b"glTF" or version != 2 or length != len(raw):
-        raise ValueError(f"Invalid source GLB: {path}")
-    offset, doc, binary = 12, None, None
-    while offset < len(raw):
-        size, chunk_type = struct.unpack_from("<II", raw, offset)
-        offset += 8
-        chunk = raw[offset : offset + size]
-        offset += size
-        if chunk_type == 0x4E4F534A:
-            doc = json.loads(chunk.decode("utf-8"))
-        elif chunk_type == 0x004E4942:
-            binary = bytearray(chunk)
-    if doc is None or binary is None:
-        raise ValueError("Source GLB is missing JSON or BIN chunk")
-    return doc, binary
-
-
-def write_glb(path: pathlib.Path, doc: dict, binary: bytearray) -> None:
-    while len(binary) % 4:
-        binary.append(0)
-    doc["buffers"][0]["byteLength"] = len(binary)
-    json_chunk = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    while len(json_chunk) % 4:
-        json_chunk += b" "
-    total = 12 + 8 + len(json_chunk) + 8 + len(binary)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as f:
-        f.write(struct.pack("<4sII", b"glTF", 2, total))
-        f.write(struct.pack("<II", len(json_chunk), 0x4E4F534A))
-        f.write(json_chunk)
-        f.write(struct.pack("<II", len(binary), 0x004E4942))
-        f.write(binary)
 
 
 def unit(v):
@@ -81,15 +42,16 @@ class Geometry:
         self.triangle(a, c, d)
 
     def side_cheek(self, points, z_center, thickness):
-        """Extrude a triangular molded cheek in the seat's side plane."""
+        """Extrude a clockwise convex side profile."""
         z0, z1 = z_center - thickness / 2, z_center + thickness / 2
         front = [(x, y, z0) for x, y in points]
         back = [(x, y, z1) for x, y in points]
-        self.triangle(*front)
-        self.triangle(*reversed(back))
-        for i in range(3):
-            j = (i + 1) % 3
-            self.quad(front[i], front[j], back[j], back[i])
+        for i in range(1, len(points) - 1):
+            self.triangle(front[0], front[i], front[i + 1])
+            self.triangle(back[0], back[i + 1], back[i])
+        for i in range(len(points)):
+            j = (i + 1) % len(points)
+            self.quad(front[j], front[i], back[i], back[j])
 
     def box(self, center, dims, angle=0.0):
         cx, cy, cz = center
@@ -114,19 +76,30 @@ class Geometry:
     def beam(self, start, end, radius, sides=12):
         axis = unit(sub(end, start))
         ref = (0.0, 0.0, 1.0) if abs(axis[2]) < 0.9 else (0.0, 1.0, 0.0)
-        u = unit(cross(axis, ref))
-        v = unit(cross(axis, u))
-        ring_a, ring_b = [], []
-        for i in range(sides):
-            a = 2 * math.pi * i / sides
-            radial = tuple(u[j] * math.cos(a) + v[j] * math.sin(a) for j in range(3))
-            ring_a.append(tuple(start[j] + radial[j] * radius for j in range(3)))
-            ring_b.append(tuple(end[j] + radial[j] * radius for j in range(3)))
+        self.tube([start, end], radius, ref, sides)
+
+    def tube(self, path, radius, ref, sides=8):
+        rings = []
+        for i, point in enumerate(path):
+            tangent = unit(sub(path[min(i + 1, len(path) - 1)], path[max(i - 1, 0)]))
+            u = unit(cross(tangent, ref))
+            v = unit(cross(tangent, u))
+            ring = []
+            for j in range(sides):
+                angle = 2 * math.pi * j / sides
+                ring.append(tuple(
+                    point[k] + radius * (u[k] * math.cos(angle) + v[k] * math.sin(angle))
+                    for k in range(3)
+                ))
+            rings.append(ring)
+        for a, b in zip(rings, rings[1:]):
+            for i in range(sides):
+                j = (i + 1) % sides
+                self.quad(a[i], a[j], b[j], b[i])
         for i in range(sides):
             j = (i + 1) % sides
-            self.quad(ring_a[i], ring_a[j], ring_b[j], ring_b[i])
-            self.triangle(start, ring_a[j], ring_a[i])
-            self.triangle(end, ring_b[i], ring_b[j])
+            self.triangle(path[0], rings[0][j], rings[0][i])
+            self.triangle(path[-1], rings[-1][i], rings[-1][j])
 
 
 def add_accessors(doc: dict, binary: bytearray, geometry: Geometry) -> dict:
@@ -150,58 +123,119 @@ def add_accessors(doc: dict, binary: bytearray, geometry: Geometry) -> dict:
     return {"POSITION": accessors[0], "NORMAL": accessors[1]}
 
 
-def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float, float, float]) -> int:
-    x, y, z0 = anchor
-    # Four lightweight mesh groups keep the model easy to inspect and shade.
-    groups = {name: Geometry() for name in ("upholstery", "shell", "frame", "harness", "legrest")}
-    soft, shell, frame, harness, legrest = (groups[name] for name in ("upholstery", "shell", "frame", "harness", "legrest"))
+def add_canopy(fabric, trim, shell):
+    # Each row sets the center and side coordinates of a transverse bow.
+    # The edges converge toward the two pivots below the fabric.
+    bows = [
+        (0.278, 0.619, 0.236, 0.367, 0.224),
+        (0.264, 0.688, 0.241, 0.404, 0.230),
+        (0.136, 0.736, 0.188, 0.435, 0.236),
+        (-0.016, 0.712, 0.107, 0.455, 0.234),
+        (-0.149, 0.617, 0.015, 0.465, 0.226),
+    ]
 
-    # Low-profile seat pan and its upholstered top.
-    shell.box((x + 0.055, y + 0.115, z0), (0.43, 0.07, 0.43))
-    soft.box((x + 0.045, y + 0.158, z0), (0.40, 0.045, 0.40))
-    # Reclined backrest: rearward tilt follows the stroller's inclined frame.
-    shell.box((x + 0.155, y + 0.390, z0), (0.07, 0.47, 0.43), angle=-math.radians(18))
-    soft.box((x + 0.112, y + 0.395, z0), (0.045, 0.43, 0.39), angle=-math.radians(18))
+    def arch(bow):
+        cx, cy, sx, sy, half_width = bow
+        points = []
+        for j in range(25):
+            theta = math.pi * j / 24
+            height = math.sin(theta) ** 0.52
+            points.append((sx + (cx - sx) * height, sy + (cy - sy) * height, -half_width * math.cos(theta)))
+        return points
 
-    # Side bolsters and arm rails bound the child seating area.
+    rows = [arch(bows[0])]
+    for i, (left, right) in enumerate(zip(bows, bows[1:])):
+        before = bows[max(i - 1, 0)]
+        after = bows[min(i + 2, len(bows) - 1)]
+        for j in range(1, 6):
+            t = j / 5
+            smooth = 3 * t**2 - 2 * t**3
+            start_tangent = t * (1 - t)**2
+            end_tangent = t**2 * (t - 1)
+            rows.append(arch([
+                x + (y - x) * smooth + (y - w) * start_tangent / 2 + (z - x) * end_tangent / 2
+                for w, x, y, z in zip(before, left, right, after)
+            ]))
+
+    for back, front in zip(rows, rows[1:]):
+        for j in range(len(back) - 1):
+            fabric.quad(back[j], front[j], front[j + 1], back[j + 1])
+
+    for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[-1], 0.007)):
+        trim.tube(row, radius, (1.0, 0.0, 0.0))
+    for side, edge in ((-1, 0), (1, -1)):
+        hinge = (0.152, 0.330, side * 0.221)
+        shell.beam((hinge[0], hinge[1], side * 0.200), (hinge[0], hinge[1], side * 0.237), 0.031)
+        trim.tube([row[edge] for row in rows], 0.004, (0.0, 0.0, 1.0))
+        for row in (rows[0], rows[-1]):
+            trim.beam(hinge, row[edge], 0.006, sides=8)
+
+
+def add_side_mount(mount, latch, host_z):
+    rail_angle = math.radians(37)
     for side in (-1, 1):
-        zz = z0 + side * 0.198
-        soft.box((x - 0.005, y + 0.225, zz), (0.32, 0.13, 0.045), angle=math.radians(7))
-        frame.beam((x - 0.175, y + 0.255, zz), (x + 0.110, y + 0.285, zz), 0.012)
-        frame.beam((x + 0.085, y + 0.275, zz), (x + 0.245, y + 0.520, zz), 0.014)
-        frame.beam((x + 0.245, y + 0.520, zz), (x + 0.185, y + 0.595, zz), 0.014)
-
-        # Broad molded cheek plates bring the seat shell down to the frame
-        # attachment points. The blocky socket overlaps the chassis host so
-        # the interface reads as a direct, load-bearing snap-in connection.
-        host_z = side * 0.22
-        shell.side_cheek(
-            [(x - 0.075, y + 0.155), (x + 0.205, y + 0.145), (x + 0.080, y - 0.075)],
-            side * 0.190,
-            0.085,
+        # The center of this channel stays open for the existing host and rail.
+        mount.side_cheek(
+            [(-0.103, 0.142), (0.100, 0.160), (0.062, 0.084), (-0.039, 0.033)],
+            side * (0.183 + host_z + 0.006) / 2,
+            host_z + 0.006 - 0.183,
         )
-        shell.box((x + 0.015, y + 0.015, host_z), (0.185, 0.145, 0.105))
-        # Large molded latch face and cross-pin make the insertion interface
-        # legible from a 3/4 view without adding a slender support rod.
-        shell.box((x + 0.015, y + 0.015, side * 0.252), (0.120, 0.095, 0.025))
-        frame.beam((x + 0.015, y + 0.015, side * 0.247), (x + 0.015, y + 0.015, side * 0.285), 0.018)
+        mount.box((-0.020, 0.031, side * host_z), (0.112, 0.026, 0.062), rail_angle)
+        # A shallow locating pad seats on the receiver without filling the slot.
+        mount.box((-0.022, 0.012, side * host_z), (0.028, 0.008, 0.022), rail_angle)
+        for wall in (-1, 1):
+            mount.box((-0.003, 0.008, side * host_z + wall * 0.024), (0.112, 0.053, 0.014), rail_angle)
+        latch.beam((-0.003, 0.010, side * (host_z + 0.029)), (-0.003, 0.010, side * (host_z + 0.038)), 0.016)
 
-    # Front restraint bar and an extended padded legrest. The broad shell
-    # panel begins at the seat front and projects forward so it is visible as
-    # a child leg support, rather than hiding as a tiny block beneath the pan.
-    frame.beam((x - 0.155, y + 0.300, -0.188), (x - 0.155, y + 0.300, 0.188), 0.013)
-    for side in (-1, 1):
-        frame.beam((x - 0.155, y + 0.300, side * 0.188), (x - 0.105, y + 0.275, side * 0.198), 0.013)
-    frame.beam((x - 0.120, y + 0.055, -0.13), (x - 0.120, y + 0.055, 0.13), 0.012)
-    shell.box((x - 0.310, y + 0.087, 0.0), (0.32, 0.070, 0.38), angle=math.radians(8))
-    legrest.box((x - 0.310, y + 0.130, 0.0), (0.30, 0.040, 0.35), angle=math.radians(8))
 
-    # Five-point harness strips and central buckle.
+def add_legrest(support, pad, rear):
+    # Keep the rear tray under its own pan, behind the front seat envelope.
+    # The front tray can project farther forward with a shallower slope.
+    start = (-0.143, 0.109)
+    toe = (-0.189, -0.086) if rear else (-0.323, -0.055)
+    dx, dy = start[0] - toe[0], start[1] - toe[1]
+    length = math.hypot(dx, dy)
+    angle = math.atan2(dy, dx)
+    cx, cy = (start[0] + toe[0]) / 2, (start[1] + toe[1]) / 2
+    width = 0.328 if rear else 0.356
+    support.box((cx, cy, 0.0), (length + 0.020, 0.033, width), angle)
+    pad.box((cx - math.sin(angle) * 0.022, cy + math.cos(angle) * 0.022, 0.0),
+            (length - 0.020, 0.015, width - 0.026), angle)
+    support.box((toe[0] - 0.011, toe[1] - 0.004, 0.0), (0.061, 0.023, width))
+    pad.box((toe[0] - 0.018, toe[1] + 0.011, 0.0), (0.046, 0.011, width - 0.018))
+
+
+def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
+    groups = {name: Geometry() for name in (
+        "upholstery", "shell", "frame", "harness", "mounts",
+        "legrest_shell", "legrest", "canopy", "canopy_trim",
+    )}
+    soft, shell, frame, harness = (groups[name] for name in ("upholstery", "shell", "frame", "harness"))
+
+    shell.box((0.055, 0.115, 0.0), (0.43, 0.070, 0.394))
+    soft.box((0.045, 0.158, 0.0), (0.40, 0.045, 0.378))
+    shell.box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
+    soft.box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
+
     for side in (-1, 1):
-        harness.beam((x + 0.190, y + 0.535, side * 0.095), (x - 0.055, y + 0.205, side * 0.045), 0.009, sides=8)
-        harness.beam((x - 0.055, y + 0.205, side * 0.045), (x - 0.105, y + 0.200, side * 0.018), 0.009, sides=8)
-        harness.beam((x - 0.045, y + 0.205, side * 0.045), (x - 0.045, y + 0.205, 0.0), 0.009, sides=8)
-    harness.box((x - 0.045, y + 0.198, 0.0), (0.035, 0.035, 0.045))
+        zz = side * 0.196
+        soft.box((-0.005, 0.222, zz), (0.32, 0.120, 0.045), math.radians(7))
+        frame.beam((-0.158, 0.251, zz), (0.111, 0.283, zz), 0.011)
+        frame.beam((-0.168, 0.305, side * 0.178), (-0.116, 0.265, zz), 0.013)
+        shoulder = (0.128, 0.535, side * 0.097)
+        lower_back = (0.066, 0.320, side * 0.068)
+        buckle = (-0.063, 0.198, side * 0.012)
+        harness.beam(shoulder, lower_back, 0.009, sides=8)
+        harness.beam(lower_back, buckle, 0.009, sides=8)
+        harness.beam((0.026, 0.195, side * 0.180), buckle, 0.009, sides=8)
+
+    frame.beam((-0.168, 0.305, -0.178), (-0.168, 0.305, 0.178), 0.016)
+    harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
+    harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
+
+    add_side_mount(groups["mounts"], frame, host_z)
+    add_legrest(groups["legrest_shell"], groups["legrest"], rear)
+    add_canopy(groups["canopy"], groups["canopy_trim"], shell)
 
     material_indices = {}
     for name, color, metallic, roughness in (
@@ -209,6 +243,10 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
         ("shell", [0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
         ("frame", [0.43, 0.49, 0.55, 1.0], 0.68, 0.34),
         ("harness", [0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
+        ("mounts", [0.070, 0.076, 0.084, 1.0], 0.10, 0.56),
+        ("legrest_shell", [0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
+        ("canopy", [0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
+        ("canopy_trim", [0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
         ("legrest", [0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
     ):
         material_indices[name] = len(doc["materials"])
@@ -226,6 +264,10 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
     for name, geometry in groups.items():
         if not geometry.vertices:
             continue
+        geometry.vertices = [
+            (x + anchor[0], y + anchor[1], z)
+            for x, y, z in geometry.vertices
+        ]
         attributes = add_accessors(doc, binary, geometry)
         primitives.append({"attributes": attributes, "material": material_indices[name], "mode": 4})
 
@@ -237,15 +279,33 @@ def make_seat(doc: dict, binary: bytearray, seat_name: str, anchor: tuple[float,
     return node_index
 
 
+def port_position(doc, port):
+    centers = []
+    for side in (1, -1):
+        prefix = f"narrow-open_host_{side}_{port}."
+        node = next(node for node in doc["nodes"] if node["name"].startswith(prefix))
+        primitive = doc["meshes"][node["mesh"]]["primitives"][0]
+        accessor = doc["accessors"][primitive["attributes"]["POSITION"]]
+        centers.append([(lo + hi) / 2 for lo, hi in zip(accessor["min"], accessor["max"])])
+    front_back, height, _ = ((a + b) / 2 for a, b in zip(*centers))
+    half_span = abs(centers[0][2] - centers[1][2]) / 2
+    return (front_back, height), half_span
+
+
 def main():
-    doc, binary = read_glb(SOURCE)
-    doc, binary = compact_active_scene(doc, binary)
-    # The existing chassis contains low and high attachment hosts at these
-    # measured centres: LOW x=.280/y=.450, HIGH x=.787/y=.830, z= +/- .220 m.
-    make_seat(doc, binary, "D02_lower_S05_molded_side_mounts_concept", (0.280, 0.450, 0.0))
-    make_seat(doc, binary, "D02_upper_S05_molded_side_mounts_concept", (0.787, 0.830, 0.0))
-    write_glb(OUTPUT, doc, binary)
-    print(f"Created {OUTPUT.relative_to(ROOT)} ({OUTPUT.stat().st_size} bytes)")
+    output_dir = ROOT / "models/double_cabin"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for width in (550, 650):
+        for wheel in ("S", "M", "L"):
+            doc, binary = prepare_chassis(width, wheel)
+            lower, lower_span = port_position(doc, "L")
+            upper, upper_span = port_position(doc, "H")
+            make_seat(doc, binary, "D02_Front", lower, lower_span)
+            make_seat(doc, binary, "D02_Rear", upper, upper_span, rear=True)
+            level_assembly(doc, binary)
+            output = output_dir / f"D02_w{width}_state1_wheel_{wheel}.glb"
+            write_glb(output, doc, binary)
+            print(f"Created {output.relative_to(ROOT)} ({output.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":
