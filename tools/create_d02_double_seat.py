@@ -7,20 +7,26 @@ import math
 import pathlib
 import struct
 
-from d02_front_mount import relocate_front_ports
+from d02_front_mount import relocate_front_ports, relocate_high_ports
 from generate_wheel_variants import read_positions, write_glb
 from prepare_d02_chassis import prepare_chassis, level_assembly
+from universal_mount import (
+    FRAME_LAND_Y, INSERT_DEPTH, INSERT_X, INSERT_Z, LOCK_CLEARANCE, LOCK_Y,
+    RECEIVER_OUTER_X, RECEIVER_OUTER_Z, receiver_geometry, standardize_receivers,
+)
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SEAT_DROP = 0.085
-FRONT_RECLINE_DROP = 0.065
+SEAT_SHELL_DROP = 0.150
 FRONT_PORT_ADVANCE = 0.150
 FRONT_PORT_DROP = 0.080
-REAR_SEAT_DROP = 0.060
-REAR_SEAT_SETBACK = 0.060
-STANDARD_MOUNT_Z = 0.220
-RAIL_ANGLE = math.radians(37)
+HIGH_PORT_SETBACK = 0.060
+HIGH_PORT_RISE = 0.005
+STANDARD_MOUNT_Z = 0.256
+# Taller station supports clear the 650 offset pocket above the upper rail.
+D02_RISE = 0.030
+D02_LAND_Y = FRAME_LAND_Y + D02_RISE
+D02_LOCK_Y = LOCK_Y + D02_RISE
 
 
 def unit(v):
@@ -249,49 +255,59 @@ def canopy_geometry(opening, lift=0.0):
     return {"canopy": fabric, "canopy_trim": trim}
 
 
-def rail_point(u, v, z):
-    cosine, sine = math.cos(RAIL_ANGLE), math.sin(RAIL_ANGLE)
-    return u * cosine - v * sine, u * sine + v * cosine, z
+def insert_shoe(shoe, latch, side, span):
+    """The two longitudinal halves and the centered lock fit in either direction."""
+    z = side * span
+    stem = INSERT_X / 2 - LOCK_CLEARANCE
+    for end in (-1, 1):
+        shoe.box((end * (LOCK_CLEARANCE + stem / 2), D02_LAND_Y - INSERT_DEPTH / 2, z),
+                 (stem, INSERT_DEPTH, INSERT_Z))
+    for lo, hi in ((D02_LAND_Y - INSERT_DEPTH, D02_LOCK_Y - LOCK_CLEARANCE),
+                   (D02_LOCK_Y + LOCK_CLEARANCE, D02_LAND_Y)):
+        shoe.box((0, (lo + hi) / 2, z), (2 * LOCK_CLEARANCE, hi - lo, INSERT_Z))
+    latch.beam((0, D02_LOCK_Y, z), (0, D02_LOCK_Y, z + side * (RECEIVER_OUTER_Z / 2 + 0.002)),
+               0.0038, sides=16)
 
 
-def rail_box(geometry, u, v, z, dims):
-    geometry.box(rail_point(u, v, z), dims, RAIL_ANGLE)
-
-
-def add_socket(socket, latch, side, center_z):
-    rail_box(socket, 0.003, 0.037, side * center_z, (0.112, 0.026, 0.046))
-    # The center remains open from below. A shallow pad locates the insert.
-    rail_box(socket, -0.010, 0.023, side * center_z, (0.028, 0.008, 0.022))
-    for wall in (-1, 1):
-        rail_box(socket, 0.003, 0.008, side * center_z + wall * 0.020, (0.112, 0.053, 0.006))
-    latch.beam(
-        rail_point(0.003, 0.009, side * (center_z + 0.021)),
-        rail_point(0.003, 0.009, side * (center_z + 0.026)),
-        0.014,
-    )
-
-
-def add_side_mount(panel, mount, latch, adapter, host_z, panel_drop, setback):
+def add_side_mount(panel, mount, shoe, latch):
     for side in (-1, 1):
-        # One molded side panel is both the low sidewall and the socket support.
-        profile = [(-0.174, 0.055), (-0.174, 0.108), (0.078, 0.145), (0.110, 0.117),
-                   (0.078, 0.061), (-0.030, 0.018), (-0.125, 0.026)]
-        panel.side_cheek(
-            [(x + setback, y - panel_drop) for x, y in profile],
-            side * 0.191,
-            0.020,
-        )
-        add_socket(mount, latch, side, STANDARD_MOUNT_Z)
+        # The directional side shell and the symmetric latch pod are molded together.
+        profile = [(-0.174, -0.010), (-0.174, 0.043), (0.078, 0.080), (0.110, 0.052),
+                   (0.078, -0.004), (-0.030, -0.047), (-0.125, -0.039)]
+        panel.side_cheek(profile, side * 0.191, 0.020)
+        panel.side_cheek([(-0.048, 0.045), (-0.035, D02_LAND_Y + 0.020),
+                          (0.035, D02_LAND_Y + 0.020), (0.048, 0.045)], side * 0.191, 0.021)
+        inside, outside = 0.193, STANDARD_MOUNT_Z + RECEIVER_OUTER_Z / 2 - 0.005
+        mount.box((0, D02_LAND_Y + 0.012, side * (inside + outside) / 2),
+                  (RECEIVER_OUTER_X, 0.024, outside - inside))
+        insert_shoe(shoe, latch, side, STANDARD_MOUNT_Z)
+        latch.beam((0, D02_LAND_Y + 0.012, side * (outside - 0.002)),
+                   (0, D02_LAND_Y + 0.012, side * (outside + 0.004)), 0.007)
 
-        # Wide chassis: a tongue plugs into the standard socket from below.
-        # Its offset bridge carries a second socket over the actual frame port.
-        offset = host_z - STANDARD_MOUNT_Z
-        if offset > 0.001:
-            add_socket(adapter, latch, side, host_z)
-            rail_box(adapter, -0.002, -0.004, side * STANDARD_MOUNT_Z, (0.060, 0.051, 0.026))
-            rail_box(adapter, -0.002, -0.028, side * (STANDARD_MOUNT_Z + (offset - 0.022) / 2),
-                     (0.062, 0.017, offset - 0.010))
-            rail_box(adapter, -0.002, -0.015, side * (host_z - 0.020), (0.062, 0.013, 0.007))
+
+def add_width_adapter(doc, binary, station, centers):
+    """The optional 650 spacer mates to the frame and carries the standard pocket."""
+    for port_side in (-1, 1):
+        x, y, z = centers[station, port_side]
+        side = math.copysign(1, z)
+        adapter, latch = Geometry(), Geometry()
+        span = abs(z)
+        insert_shoe(adapter, latch, side, span)
+        walls, normals = receiver_geometry(include_support=False)
+        adapter.vertices.extend((a, b + D02_RISE, c + side * STANDARD_MOUNT_Z) for a, b, c in walls)
+        adapter.normals.extend(normals)
+
+        # Bridge around the centered pins, leaving each lock accessible.
+        inner_end = STANDARD_MOUNT_Z + RECEIVER_OUTER_Z / 2 - 0.004
+        outer_end = span + INSERT_Z / 2
+        for end in (-1, 1):
+            adapter.box((end * 0.026, D02_LAND_Y + 0.006, side * (inner_end + outer_end) / 2),
+                        (0.012, 0.012, outer_end - inner_end))
+        adapter.box((0, D02_LAND_Y + 0.006, z), (RECEIVER_OUTER_X, 0.012, RECEIVER_OUTER_Z))
+        for geometry in (adapter, latch):
+            geometry.vertices = [(a + x, b + y, c) for a, b, c in geometry.vertices]
+        index = mesh_node(doc, binary, f"D02_WideAdapter_{station}_{port_side}", {"width_adapter": adapter, "mount_pin": latch})
+        doc["scenes"][doc.get("scene", 0)]["nodes"].append(index)
 
 
 def guard_cradle(geometry, center):
@@ -318,8 +334,8 @@ def guard_cradle(geometry, center):
 
 
 def add_guardrail(doc, binary, name, base):
-    side_arm = [(-0.180, 0.219, 0.199), (-0.193, 0.262, 0.211), (-0.205, 0.315, 0.203),
-                (-0.211, 0.334, 0.191), (-0.215, 0.337, 0.168)]
+    side_arm = [(-0.180, 0.219, 0.174), (-0.193, 0.262, 0.181), (-0.205, 0.315, 0.185),
+                (-0.211, 0.334, 0.177), (-0.215, 0.337, 0.163)]
     x, y, z = side_arm[0]
     left, right = (x, y, z), (x, y, -z)
     rail = Geometry()
@@ -333,9 +349,9 @@ def add_guardrail(doc, binary, name, base):
         # leaving both the retained dock and the release button out of its sweep.
         rail.beam((x - 0.008, y, lateral), (dock_x + 0.004, y, lateral), 0.012)
         guard_cradle(base["guard_dock"], (dock_x, y, lateral))
-        base["guard_dock"].box((dock_x, y - 0.025, side * 0.192), (0.014, 0.018, 0.024))
-        base["guard_release"].beam((dock_x, y - 0.010, lateral + side * 0.017),
-                                   (dock_x, y - 0.010, lateral + side * 0.024), 0.008)
+        base["guard_dock"].box((dock_x, y - 0.025, side * 0.174), (0.014, 0.018, 0.024))
+        base["guard_release"].beam((dock_x, y - 0.010, lateral + side * 0.013),
+                                   (dock_x, y - 0.010, lateral + side * 0.018), 0.007)
 
     # Each endpoint is a separate pivot. At most one is opened at a time.
     bar = mesh_node(doc, binary, name + "_FullGuard", {"guardrail": rail}, origin=left)
@@ -460,6 +476,7 @@ MATERIALS = {
     "harness": ([0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
     "mount_cheek": ([0.155, 0.258, 0.310, 1.0], 0.08, 0.62),
     "mounts": ([0.190, 0.415, 0.475, 1.0], 0.25, 0.40),
+    "mount_shoe": ([0.105, 0.210, 0.233, 1.0], 0.44, 0.44),
     "mount_pin": ([0.740, 0.804, 0.833, 1.0], 0.52, 0.34),
     "width_adapter": ([0.63, 0.32, 0.105, 1.0], 0.26, 0.46),
     "legrest_shell": ([0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
@@ -616,7 +633,7 @@ def handle_extension(doc, binary, level):
     return tracks
 
 
-def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
+def make_seat(doc, binary, name, anchor, level, rear=False):
     base = {key: Geometry() for key in ("upholstery", "shell", "guard_dock", "harness", "guard_release")}
     soft, shell, harness = (base[key] for key in ("upholstery", "shell", "harness"))
     soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
@@ -651,36 +668,21 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
         back_tracks.extend(handle_extension(doc, binary, level))
     clip(doc, binary, name + "_backrest", back_tracks)
 
-    # Drop the rear bucket within the molded side panels. Its aft offset
-    # preserves travel room for the front canopy and folded rear legrest.
-    # The two sockets still mate with the original chassis receivers.
-    panel_drop = REAR_SEAT_DROP if rear else FRONT_RECLINE_DROP
-    setback = REAR_SEAT_SETBACK if rear else 0.0
-    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(setback, -SEAT_DROP - panel_drop, 0.0),
+    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_SHELL_DROP, 0.0),
                      children=[bar, legrest, legrest_mount, knee, backrest, straps, hip])
-    mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
-    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"],
-                   host_z, panel_drop, setback)
+    mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_shoe", "mount_pin")}
+    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_shoe"], mounts["mount_pin"])
     angle, ground = level
     c, s = math.cos(angle), math.sin(angle)
     x, y = anchor
     root = mesh_node(doc, binary, name, mounts, children=[seat],
                      translation=(c*x - s*y, s*x + c*y - ground, 0.0),
-                     rotation=rotation(AXIS_Z, math.degrees(angle)))
+                     rotation=rotation(AXIS_Z, math.degrees(angle)), extras={"reversibleCabin": True})
     doc["scenes"][doc.get("scene", 0)]["nodes"].append(root)
 
 
-def port_position(doc, port):
-    centers = []
-    for side in (1, -1):
-        prefix = f"narrow-open_host_{side}_{port}."
-        node = next(node for node in doc["nodes"] if node["name"].startswith(prefix))
-        primitive = doc["meshes"][node["mesh"]]["primitives"][0]
-        accessor = doc["accessors"][primitive["attributes"]["POSITION"]]
-        centers.append([(lo + hi) / 2 for lo, hi in zip(accessor["min"], accessor["max"])])
-    front_back, height, _ = ((a + b) / 2 for a, b in zip(*centers))
-    half_span = abs(centers[0][2] - centers[1][2]) / 2
-    return (front_back, height), half_span
+def port_position(centers, port):
+    return tuple((a + b) / 2 for a, b in zip(centers[port, 1][:2], centers[port, -1][:2]))
 
 
 def main():
@@ -690,11 +692,14 @@ def main():
         for wheel in ("S", "M", "L"):
             doc, binary = prepare_chassis(width, wheel)
             relocate_front_ports(doc, binary, forward=FRONT_PORT_ADVANCE, down=FRONT_PORT_DROP)
-            lower, lower_span = port_position(doc, "L")
-            upper, upper_span = port_position(doc, "H")
+            relocate_high_ports(doc, binary, aft=HIGH_PORT_SETBACK, up=HIGH_PORT_RISE)
+            centers = standardize_receivers(doc, binary, rise=D02_RISE)
+            if width == 650:
+                for station in ("L", "H"):
+                    add_width_adapter(doc, binary, station, centers)
             level = level_assembly(doc, binary)
-            make_seat(doc, binary, "D02_Front", lower, lower_span, level)
-            make_seat(doc, binary, "D02_Rear", upper, upper_span, level, rear=True)
+            make_seat(doc, binary, "D02_Front", port_position(centers, "L"), level)
+            make_seat(doc, binary, "D02_Rear", port_position(centers, "H"), level, rear=True)
             output = output_dir / f"D02_w{width}_state1_wheel_{wheel}.glb"
             write_glb(output, doc, binary)
             print(f"Created {output.relative_to(ROOT)} ({output.stat().st_size} bytes)")

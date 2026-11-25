@@ -464,6 +464,7 @@ const state = {
   wheelSize: 'M',
   postureState: 1,    // 1:安装完成, 2:折叠中, 3:折叠后站立, 4:拆车轮, 5:拆横杆, 6:均拆
   cameraView: 'iso',
+  d02Facing: 'FF',
   showTray: false,
   cacheBust: Date.now()
 };
@@ -729,20 +730,70 @@ const D02_COMPONENTS = [
 const D02_FRONT_BACKREST = 'D02_Front_backrest';
 const D02_REAR_LEGREST = 'D02_Rear_legrest';
 const D02_FIVE_POSITION_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
+const D02_SEATS = [['Front', '前座'], ['Rear', '后座']];
+const D02_REVERSIBLE_POSE = { guardrail: 0, canopy: 3, legrest: 0, backrest: 0 };
+const D02_REVERSIBLE_PREVIEW = {
+  models: ['550S', '550M', '550L', '650S', '650M', '650L'],
+  Front: D02_REVERSIBLE_POSE,
+  Rear: D02_REVERSIBLE_POSE
+};
+const D02_FACING_PREVIEWS = {
+  FR: D02_REVERSIBLE_PREVIEW,
+  RF: D02_REVERSIBLE_PREVIEW,
+  RR: D02_REVERSIBLE_PREVIEW
+};
 const d02ControlRows = new Map();
+const d02FacingRows = [];
 let d02Mixer = null;
 let d02Loading = false;
 let d02ReclinePhase = null;
+let d02AllowedFacings = new Set(['FF']);
+let d02FacingFallback = false;
+
+function buildD02FacingRow(seatIndex, seatLabel) {
+  const row = document.createElement('div');
+  row.className = 'flex items-center gap-2';
+  row.setAttribute('role', 'group');
+  row.setAttribute('aria-label', `${seatLabel}朝向`);
+  row.hidden = true;
+  const label = document.createElement('span');
+  label.className = 'w-8 shrink-0 text-[11px] text-zinc-600';
+  label.textContent = '朝向';
+  row.appendChild(label);
+
+  const buttons = ['F', 'R'].map(direction => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = `d02-${D02_SEATS[seatIndex][0].toLowerCase()}-facing-${direction.toLowerCase()}`;
+    button.className = 'card-btn min-h-[28px] flex-1 px-0.5 rounded-lg text-[11px] font-medium';
+    button.textContent = direction === 'F' ? '朝前' : '朝后';
+    button.addEventListener('click', () => {
+      const pair = d02FacingWith(seatIndex, direction);
+      if (d02Loading || !d02AllowedFacings.has(pair) || pair === state.d02Facing) return;
+      state.d02Facing = pair;
+      updateScene();
+    });
+    row.appendChild(button);
+    return { button, direction };
+  });
+  d02FacingRows.push({ row, buttons });
+  return row;
+}
+
+function d02FacingWith(seatIndex, direction) {
+  return seatIndex === 0 ? direction + state.d02Facing[1] : state.d02Facing[0] + direction;
+}
 
 function buildD02StateControls() {
   const container = document.getElementById('d02-seat-controls');
-  for (const [seat, seatLabel] of [['Front', '前座'], ['Rear', '后座']]) {
+  for (const [seatIndex, [seat, seatLabel]] of D02_SEATS.entries()) {
     const fieldset = document.createElement('fieldset');
     fieldset.className = 'min-w-0 space-y-1.5 p-2.5 rounded-xl border border-zinc-200/80';
     const legend = document.createElement('legend');
     legend.className = 'px-1 text-xs font-semibold text-zinc-800';
     legend.textContent = seatLabel;
     fieldset.appendChild(legend);
+    fieldset.appendChild(buildD02FacingRow(seatIndex, seatLabel));
 
     for (const component of D02_COMPONENTS) {
       const row = document.createElement('div');
@@ -757,6 +808,7 @@ function buildD02StateControls() {
 
       const control = {
         name: `D02_${seat}_${component.key}`,
+        seat, component: component.key, previewIndex: null,
         buttons: [], index: component.initial, action: null, transition: null,
         variants: component.variants || null, variantActions: [], activeIndex: 0
       };
@@ -796,21 +848,33 @@ function updateD02StateControls() {
   document.getElementById('studio-workspace').classList.toggle('has-operations', showChassis || showD02);
   if (!showD02) return;
 
+  d02FacingRows.forEach(({ row, buttons }, seatIndex) => {
+    row.hidden = d02AllowedFacings.size === 1;
+    buttons.forEach(({ button, direction }) => {
+      const selected = state.d02Facing[seatIndex] === direction;
+      button.disabled = d02Loading || !d02AllowedFacings.has(d02FacingWith(seatIndex, direction));
+      button.classList.toggle('card-active', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+  });
+
+  const fixedPreview = state.d02Facing !== 'FF';
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
   const rear = d02ControlRows.get(D02_REAR_LEGREST);
-  const rearLegrestLocked = Boolean(d02ReclinePhase) || frontReclineNeedsStowedLegrest(front);
+  const rearLegrestLocked = !fixedPreview && (Boolean(d02ReclinePhase) || frontReclineNeedsStowedLegrest(front));
   let availablePositions = 0;
   let positionCount = 0;
   for (const control of d02ControlRows.values()) {
     const hasAction = control.variants ? control.variantActions.some(Boolean) : Boolean(control.action);
-    let selectedIndex = control.variants && !control.variantActions[control.index] ? 0 : control.index;
+    let selectedIndex = control.previewIndex ?? control.index;
+    if (control.variants && !control.variantActions[selectedIndex]) selectedIndex = 0;
     if (control === rear && rearLegrestLocked && d02ReclinePhase !== 'restoring') selectedIndex = control.buttons.length - 1;
     control.buttons.forEach((button, index) => {
       const available = hasAction && (!control.variants || index === 0 || Boolean(control.variantActions[index]));
       const selected = available && index === selectedIndex;
       positionCount++;
       if (available) availablePositions++;
-      button.disabled = d02Loading || !available || (control === rear && rearLegrestLocked);
+      button.disabled = d02Loading || fixedPreview || !available || (control === rear && rearLegrestLocked);
       button.classList.toggle('card-active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -819,20 +883,22 @@ function updateD02StateControls() {
   const status = document.getElementById('d02-states-status');
   if (d02Loading) status.textContent = '正在载入可调状态…';
   else if (!availablePositions) status.textContent = '此模型暂未提供可调状态。';
+  else if (d02FacingFallback) status.textContent = '当前模型不支持此朝向，已恢复双座朝前。';
+  else if (fixedPreview) status.textContent = '换向装配预览。切回双座朝前可继续调节。';
   else if (d02ReclinePhase === 'restoring') status.textContent = `后座腿托正在恢复到 ${rear.index + 1} 档。`;
   else if (d02ReclinePhase) status.textContent = '前座靠背正在调整，后座腿托暂时收至 5 档。';
   else if (rearLegrestLocked) status.textContent = '前座后仰时，后座腿托保持在 5 档反折位置，为靠背留出空间。';
   else if (availablePositions < positionCount) status.textContent = '此模型的部分动作暂不可用。';
   else status.textContent = '';
   const rearBackrest = d02ControlRows.get('D02_Rear_backrest');
-  if (!d02Loading && rearBackrest.action && rearBackrest.index >= 2) {
+  if (!d02Loading && !fixedPreview && rearBackrest.action && rearBackrest.index >= 2) {
     status.textContent += '后座靠背后仰时，推把同步伸出留出空间。';
   }
   status.hidden = !status.textContent;
 }
 
-function d02PositionTime(control) {
-  return control.action.getClip().duration * control.index / (control.buttons.length - 1);
+function d02PositionTime(control, index = control.index) {
+  return control.action.getClip().duration * index / (control.buttons.length - 1);
 }
 
 function createD02Action(clip) {
@@ -843,6 +909,49 @@ function supportsD02RotationTimes(clip, suffix, samples) {
   const rotation = clip?.tracks?.find(track => track.name.endsWith(suffix));
   return clip?.duration > 0 && rotation?.times.length === samples.length &&
     rotation.times.every((time, index) => Math.abs(time - samples[index] * clip.duration) < 1e-5);
+}
+
+function getD02FacingPreview(pair) {
+  if (!/^[FR]{2}$/.test(pair)) return null;
+  const preview = D02_FACING_PREVIEWS[pair];
+  if (!preview) return null;
+  return !preview.models || preview.models.includes(`${state.frameWidth}${state.wheelSize}`) ? preview : null;
+}
+
+function hasD02FacingPreviewClips(preview, clips) {
+  return D02_SEATS.every(([seat]) => D02_COMPONENTS.every(component => {
+    const index = preview[seat]?.[component.key];
+    if (!Number.isInteger(index) || index < 0 || index >= component.positions.length) return false;
+    if (component.key === 'guardrail') return index === 0 || clips.get(`D02_${seat}_${component.variants[index]}`)?.duration > 0;
+    const clip = clips.get(`D02_${seat}_${component.key}`);
+    if (component.key === 'backrest') return supportsD02RotationTimes(clip, '_Backrest.quaternion', D02_FIVE_POSITION_SAMPLES);
+    if (component.key === 'legrest') return supportsD02RotationTimes(clip, '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES);
+    return clip?.duration > 0;
+  }));
+}
+
+function prepareD02FacingModel(model, animations) {
+  d02AllowedFacings = new Set(['FF']);
+  const pairs = Object.keys(D02_FACING_PREVIEWS);
+  if (!model || !pairs.length) return;
+
+  const roots = D02_SEATS.map(([seat]) => model.getObjectByName(`D02_${seat}`));
+  if (roots.every(root => root?.userData.reversibleCabin === true)) {
+    const clips = new Map(animations.map(clip => [clip.name, clip]));
+    for (const pair of pairs) {
+      const preview = getD02FacingPreview(pair);
+      if (preview && hasD02FacingPreviewClips(preview, clips)) d02AllowedFacings.add(pair);
+    }
+  }
+
+  if (!d02AllowedFacings.has(state.d02Facing)) {
+    state.d02Facing = 'FF';
+    d02FacingFallback = true;
+    syncConfiguratorRoute();
+  }
+  roots.forEach((root, index) => {
+    if (state.d02Facing[index] === 'R') root.rotateY(Math.PI);
+  });
 }
 
 function playD02Pose(action, time) {
@@ -860,17 +969,20 @@ function bindD02PoseModel(model, animations) {
   d02Loading = false;
   d02ReclinePhase = null;
   const clips = new Map(animations.map(clip => [clip.name, clip]));
+  const preview = getD02FacingPreview(state.d02Facing);
   const supportsStow = supportsD02RotationTimes(clips.get(D02_REAR_LEGREST), '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES);
   for (const [name, control] of d02ControlRows) {
     control.action = null;
     control.transition = null;
     control.activeIndex = 0;
+    control.previewIndex = preview ? preview[control.seat][control.component] : null;
+    const initialIndex = control.previewIndex ?? control.index;
     if (control.variants) {
       const prefix = name.slice(0, -'guardrail'.length);
       control.variantActions = control.variants.map(variant => variant ? createD02Action(clips.get(prefix + variant)) : null);
-      control.action = control.variantActions[control.index] || null;
+      control.action = control.variantActions[initialIndex] || null;
       if (control.action) {
-        control.activeIndex = control.index;
+        control.activeIndex = initialIndex;
         playD02Pose(control.action, control.action.getClip().duration);
       }
     } else {
@@ -879,12 +991,12 @@ function bindD02PoseModel(model, animations) {
       if (name.endsWith('_legrest') && !supportsD02RotationTimes(clip, '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES)) continue;
       if (name.endsWith('_backrest') && !supportsD02RotationTimes(clip, '_Backrest.quaternion', D02_FIVE_POSITION_SAMPLES)) continue;
       control.action = createD02Action(clip);
-      if (control.action) playD02Pose(control.action, d02PositionTime(control));
+      if (control.action) playD02Pose(control.action, d02PositionTime(control, initialIndex));
     }
   }
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
   const rear = d02ControlRows.get(D02_REAR_LEGREST);
-  if (rear.action && frontReclineNeedsStowedLegrest(front)) rear.action.time = rear.action.getClip().duration;
+  if (!preview && rear.action && frontReclineNeedsStowedLegrest(front)) rear.action.time = rear.action.getClip().duration;
   if (d02Mixer) d02Mixer.update(0);
   updateD02StateControls();
 }
@@ -951,7 +1063,7 @@ function queueD02Guard(control, now) {
 }
 
 function setD02Position(control, index) {
-  if (control.buttons[index].disabled || index === control.index) return;
+  if (state.d02Facing !== 'FF' || control.buttons[index].disabled || index === control.index) return;
   control.index = index;
   const now = performance.now();
   if (control.variants) queueD02Guard(control, now);
@@ -987,6 +1099,9 @@ let renderToken = 0;
 
 async function updateScene() {
   const currentToken = ++renderToken;
+  d02FacingFallback = state.cabinMode === 'double' && state.selectedId === 'D02' &&
+    state.d02Facing !== 'FF' && !getD02FacingPreview(state.d02Facing);
+  if (d02FacingFallback) state.d02Facing = 'FF';
   syncConfiguratorRoute();
   d02Loading = true;
   updateD02StateControls();
@@ -1072,6 +1187,7 @@ async function updateScene() {
     }
   }
 
+  prepareD02FacingModel(d02Model, d02Animations);
   updateProductHeader(d02Model);
   bindD02PoseModel(d02Model, d02Animations);
   replaceStrollerRoot(nextGroup);
@@ -1335,7 +1451,7 @@ resizePreview();
 // ============================================================================
 // 6. Configurator route: use the address as the source for a page refresh.
 // ============================================================================
-const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'view', 'front', 'rear', 'd02'];
+const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'view', 'facing', 'front', 'rear', 'd02'];
 
 function d02PoseRouteValues(component) {
   if (component.key === 'backrest') return D02_BACKREST_ANGLES;
@@ -1372,6 +1488,7 @@ function syncConfiguratorRoute() {
   if (state.cabinMode === 'none' || state.postureState !== 1) query.set('state', String(state.postureState));
   query.set('view', state.cameraView);
   if (state.cabinMode === 'double' && state.selectedId === 'D02') {
+    if (state.d02Facing !== 'FF') query.set('facing', state.d02Facing);
     query.set('front', d02PoseRoute('Front'));
     query.set('rear', d02PoseRoute('Rear'));
   }
@@ -1401,6 +1518,8 @@ function restoreConfiguratorRoute() {
   setWheelSize(WHEEL_SIZES.includes(wheel) ? wheel : (presetWheel || 'M'), true);
   setPosture(/^[1-6]$/.test(posture) ? Number(posture) : 1, true);
   if (cabin?.id === 'D02') {
+    const facing = query.get('facing')?.toUpperCase() || 'FF';
+    state.d02Facing = /^[FR]{2}$/.test(facing) ? facing : 'FF';
     restoreD02PoseRoute('Front', query.get('front'));
     restoreD02PoseRoute('Rear', query.get('rear'));
   }

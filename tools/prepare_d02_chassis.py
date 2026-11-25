@@ -14,6 +14,7 @@ from generate_wheel_variants import (
     read_positions,
     transform_vec3,
 )
+from universal_mount import remove_receiver_nodes
 
 
 TREAD_CLEARANCE = 0.004
@@ -107,7 +108,9 @@ def fit_wheel_clearance(doc, binary, nodes, rotating_nodes):
 def prepare_chassis(width: int, wheel: str) -> tuple[dict, bytearray]:
     original_wheel = DEFAULT_WHEEL[width]
     path = MODEL_DIR / f"w{width}_state1_wheel_{original_wheel}.glb"
-    doc, binary = compact_active_scene(*read_glb(path))
+    source, source_bin = read_glb(path)
+    remove_receiver_nodes(source)
+    doc, binary = compact_active_scene(source, source_bin)
     # Resize the rotating pieces. The original fixed axle, bearings and
     # suspension pieces must stay in contact with their frame mounts.
     nodes = {node["name"].split(".")[0]: node for node in doc["nodes"]}

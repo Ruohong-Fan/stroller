@@ -105,21 +105,14 @@ def _bearing_pads(rail_points, receiver):
     return _outline(profile)
 
 
-def relocate_front_ports(doc: dict, binary: bytearray, *, forward: float = 0.0, down: float = 0.0) -> None:
-    """Move both low receivers by positive forward/down offsets in meters.
-
-    Call on the width-specific chassis before resolving seat anchors or
-    leveling the assembly. The existing receiver IDs and lateral span stay
-    the same. An offset saddle is added only when the native tube no longer
-    supports the complete receiver area.
-    """
-    if not (forward or down):
+def _relocate_ports(doc, binary, station, rail_name, support_name, dx, dy):
+    if not (dx or dy):
         return
     for side in (1, -1):
-        receiver = next(n for n in doc["nodes"] if n["name"].startswith(f"narrow-open_host_{side}_L."))
-        rail = next(n for n in doc["nodes"] if n["name"].startswith(f"main_lower_{side}."))
+        receiver = next(n for n in doc["nodes"] if n["name"].startswith(f"narrow-open_host_{side}_{station}."))
+        rail = next(n for n in doc["nodes"] if n["name"].startswith(f"{rail_name}_{side}."))
         pos = position_accessor_for_node(doc, receiver)
-        replace_positions(doc, binary, pos, lambda p: (p[0] - forward, p[1] - down, p[2]))
+        replace_positions(doc, binary, pos, lambda p: (p[0] + dx, p[1] + dy, p[2]))
         lo, hi = bounds(doc, receiver)
         center = tuple((a + b) / 2 for a, b in zip(lo, hi))
         rail_points = read_positions(doc, binary, position_accessor_for_node(doc, rail))
@@ -128,7 +121,22 @@ def relocate_front_ports(doc: dict, binary: bytearray, *, forward: float = 0.0, 
             continue
         rail_min, rail_max = bounds(doc, rail)
         material = doc["meshes"][rail["mesh"]]["primitives"][0]["material"]
+        pad_center, pad_thickness = center[2], rail_max[2] - rail_min[2] - 0.002
+        if station == "H":
+            # Reinforce the outside wall without occupying the handle's
+            # telescoping channel inside the upper tube.
+            pad_center += math.copysign(0.020, center[2])
+            pad_thickness = 0.014
         _plate(
-            doc, binary, f"D02_FrontLowerReceiverGusset_{side}", outline, center[2],
-            rail_max[2] - rail_min[2] - 0.002, material,
+            doc, binary, f"{support_name}_{side}", outline, pad_center, pad_thickness, material,
         )
+
+
+def relocate_front_ports(doc: dict, binary: bytearray, *, forward: float = 0.0, down: float = 0.0) -> None:
+    """Move both low receiver datums before fitting and leveling the display assembly."""
+    _relocate_ports(doc, binary, "L", "main_lower", "D02_FrontLowerReceiverGusset", -forward, -down)
+
+
+def relocate_high_ports(doc: dict, binary: bytearray, *, aft: float = 0.0, up: float = 0.0) -> None:
+    """Move both high receiver datums and support them on the native upper rail."""
+    _relocate_ports(doc, binary, "H", "main_upper", "D02_RearUpperReceiverGusset", aft, up)
