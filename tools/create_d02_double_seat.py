@@ -27,6 +27,8 @@ STANDARD_MOUNT_Z = 0.256
 D02_RISE = 0.030
 D02_LAND_Y = FRAME_LAND_Y + D02_RISE
 D02_LOCK_Y = LOCK_Y + D02_RISE
+BACK_PIVOT = (0.091, 0.163, 0.0)
+BACKREST_TILT = math.radians(16)
 
 
 def unit(v):
@@ -219,23 +221,36 @@ CANOPY_BOW_STOPS = (
     ),
 )
 
-# The blackout panel is sewn under the leading bow. It stays rolled at
-# the first four stops and feeds down over the shoulders at the fifth.
+def dome_bow(crown, edge, half_width):
+    """Place a transverse bow by distance up and outward from the backrest pivot."""
+    sine, cosine = math.sin(BACKREST_TILT), math.cos(BACKREST_TILT)
+
+    def point(up, outward):
+        return (BACK_PIVOT[0] + sine * up - cosine * outward,
+                BACK_PIVOT[1] + cosine * up + sine * outward)
+
+    return (*point(*crown), *point(*edge), half_width)
+
+
+# The shade stays rolled at the first four stops. In the fifth, the bows
+# carry the continuous rounded roof over the head and down to the chest.
 CANOPY_VISOR_STOPS = (
     ((0.268, 0.536, 0.257, 0.540, 0.190),),
     ((0.246, 0.661, 0.242, 0.611, 0.190),),
     ((0.127, 0.707, 0.155, 0.636, 0.190),),
     ((-0.021, 0.677, 0.088, 0.627, 0.185),),
-    ((0.020, 0.680, 0.070, 0.611, 0.185),
-     (0.035, 0.617, 0.065, 0.600, 0.185),
-     (0.026, 0.600, 0.060, 0.582, 0.186),
-     (-0.062, 0.380, 0.078, 0.365, 0.186)),
+    (
+        dome_bow((0.421, 0.270), (0.442, 0.105), 0.184),
+        dome_bow((0.328, 0.235), (0.337, 0.110), 0.185),
+        dome_bow((0.235, 0.234), (0.235, 0.105), 0.185),
+        dome_bow((0.145, 0.192), (0.142, 0.100), 0.186),
+    ),
 )
 CANOPY_VISOR_FOLDED = (
-    (0.020, 0.684, 0.074, 0.630, 0.185),
-    (0.043, 0.684, 0.078, 0.630, 0.185),
-    (0.062, 0.683, 0.080, 0.630, 0.185),
-    (0.084, 0.683, 0.081, 0.630, 0.185),
+    dome_bow((0.440, 0.302), (0.467, 0.105), 0.186),
+    dome_bow((0.433, 0.272), (0.454, 0.107), 0.185),
+    dome_bow((0.421, 0.244), (0.440, 0.108), 0.185),
+    dome_bow((0.405, 0.224), (0.424, 0.107), 0.185),
 )
 
 
@@ -255,6 +270,9 @@ def canopy_geometry(bow_stop, visor_bows):
     def join_rows(rear, leading):
         for j in range(len(rear) - 1):
             fabric.quad(rear[j], leading[j], leading[j + 1], rear[j + 1])
+
+    def blend_bows(start, end, t):
+        return tuple(a + (b - a) * t for a, b in zip(start, end))
 
     rows = [arch(bows[0])]
     for i, (left, right) in enumerate(zip(bows, bows[1:])):
@@ -283,13 +301,16 @@ def canopy_geometry(bow_stop, visor_bows):
 
     # The unused material rolls into the front binding at partial stops.
     if len(visor_bows) == 1:
-        end = visor_bows[0]
-        lead = bows[-1]
-        visor_bows = [
-            tuple(a + (b - a) * t for a, b in zip(lead, end))
-            for t in (0.25, 0.5, 0.75, 1)
-        ]
-    visor_rows = [rows[-1], *map(arch, visor_bows)]
+        visor_bows = [blend_bows(bows[-1], visor_bows[0], t) for t in (0.25, 0.5, 0.75, 1)]
+    # Ease the fabric around each inner bow to round the dome's profile.
+    profile = [bows[-1], *visor_bows]
+    visor_rows = [rows[-1]]
+    for before, bow, after in zip(profile, profile[1:], profile[2:]):
+        incoming = blend_bows(bow, before, 0.08)
+        outgoing = blend_bows(bow, after, 0.08)
+        for t in ADJUSTMENT_STEPS:
+            visor_rows.append(arch(blend_bows(blend_bows(incoming, bow, t), blend_bows(bow, outgoing, t), t)))
+    visor_rows.append(arch(profile[-1]))
     for back, front in zip(visor_rows, visor_rows[1:]):
         join_rows(back, front)
 
@@ -519,7 +540,8 @@ def add_legrest(doc, binary, name, rear):
 
     # Positive rotation lowers the forward-facing surface. The last stop is
     # a full half-turn, with the pad facing the ground beneath its own seat.
-    angles = (-6, 18, 44, 88, 180)
+    # Keep the upper tray ahead of the lower seat's dome at the fourth stop.
+    angles = (-6, 18, 44, 55 if rear else 88, 180)
     rest = mesh_node(doc, binary, name + "_Legrest", {"legrest_shell": tray, "upholstery": pad, "legrest_arm": arms},
                      translation=axis, rotation=rotation(AXIS_Z, angles[0]))
     knee, cover_track = textile_motion(doc, binary, name + "_KneeCover", lambda angle: knee_cover(angle, width / 2 - 0.024), angles)
@@ -551,7 +573,6 @@ MATERIALS = {
 AXIS_X = (1.0, 0.0, 0.0)
 AXIS_Z = (0.0, 0.0, 1.0)
 LEG_AXIS = (-0.173, 0.087, 0.0)
-BACK_PIVOT = (0.091, 0.163, 0.0)
 BACK_DEGREES = (95, 115, 135, 155, 175)
 BACK_ROTATIONS = tuple(106 - degrees for degrees in BACK_DEGREES)
 ADJUSTMENT_STEPS = (0, 0.25, 0.5, 0.75, 1)
@@ -716,8 +737,8 @@ def make_seat(doc, binary, name, anchor, level, rear=False):
     legrest, legrest_mount, knee = add_legrest(doc, binary, name, rear)
 
     moving_back = {key: Geometry() for key in ("shell", "upholstery")}
-    moving_back["shell"].box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
-    moving_back["upholstery"].box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
+    moving_back["shell"].box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -BACKREST_TILT)
+    moving_back["upholstery"].box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -BACKREST_TILT)
     canopy_nodes = add_backrest_canopy(doc, binary, name)
     backrest = mesh_node(doc, binary, name + "_Backrest", moving_back, origin=BACK_PIVOT, translation=BACK_PIVOT,
                          rotation=rotation(AXIS_Z, BACK_ROTATIONS[0]), children=canopy_nodes)
