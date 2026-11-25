@@ -773,7 +773,7 @@ function buildD02StateControls() {
 }
 
 function frontReclineNeedsStowedLegrest(front) {
-  return Boolean(front.action) && front.index > 0 && front.index < front.buttons.length - 1;
+  return Boolean(front.action) && front.index > 0;
 }
 
 function updateD02StateControls() {
@@ -808,7 +808,7 @@ function updateD02StateControls() {
   else if (!availablePositions) status.textContent = '此模型暂未提供可调状态。';
   else if (d02ReclinePhase === 'restoring') status.textContent = '后座腿托正在恢复所选档位。';
   else if (d02ReclinePhase) status.textContent = '前座靠背正在调整，后座腿托暂时收起。';
-  else if (rearLegrestLocked) status.textContent = '前座靠背调整到此角度时，后座腿托需收起。';
+  else if (rearLegrestLocked) status.textContent = '前座后仰时，后座腿托保持收起以留出空间。';
   else if (availablePositions < positionCount) status.textContent = '此模型的部分动作暂不可用。';
   else status.textContent = '';
   const rearBackrest = d02ControlRows.get('D02_Rear_backrest');
