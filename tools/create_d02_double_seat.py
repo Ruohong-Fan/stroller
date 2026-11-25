@@ -140,37 +140,67 @@ class Geometry:
             self.triangle(path[-1], rings[-1][i], rings[-1][j])
 
 
-def add_accessors(doc: dict, binary: bytearray, geometry: Geometry) -> dict:
-    if not geometry.vertices:
-        raise ValueError("Empty seat mesh")
-    accessors = []
-    for values, kind in ((geometry.vertices, "POSITION"), (geometry.normals, "NORMAL")):
-        while len(binary) % 4:
-            binary.append(0)
-        offset = len(binary)
-        for value in values:
-            binary.extend(struct.pack("<3f", *value))
-        view_index = len(doc["bufferViews"])
-        doc["bufferViews"].append({"buffer": 0, "byteOffset": offset, "byteLength": len(values) * 12, "target": 34962})
-        accessor = {"bufferView": view_index, "componentType": 5126, "count": len(values), "type": "VEC3"}
-        if kind == "POSITION":
-            accessor["min"] = [min(v[i] for v in values) for i in range(3)]
-            accessor["max"] = [max(v[i] for v in values) for i in range(3)]
-        accessors.append(len(doc["accessors"]))
-        doc["accessors"].append(accessor)
-    return {"POSITION": accessors[0], "NORMAL": accessors[1]}
+def accessor(doc, binary, values, kind, *, vertex=False, bounds=False):
+    while len(binary) % 4:
+        binary.append(0)
+    offset = len(binary)
+    width = 1 if kind == "SCALAR" else int(kind[-1])
+    pack = struct.Struct("<" + "f" * width).pack
+    for value in values:
+        binary.extend(pack(*value))
+    view = {"buffer": 0, "byteOffset": offset, "byteLength": len(binary) - offset}
+    if vertex:
+        view["target"] = 34962
+    access = {"bufferView": len(doc["bufferViews"]), "componentType": 5126, "count": len(values), "type": kind}
+    if bounds:
+        access["min"] = [min(axis) for axis in zip(*values)]
+        access["max"] = [max(axis) for axis in zip(*values)]
+    doc["bufferViews"].append(view)
+    doc["accessors"].append(access)
+    return len(doc["accessors"]) - 1
 
 
-def add_canopy(fabric, trim, shell):
+def rotation(axis, angle):
+    half_angle = math.radians(angle) / 2
+    return [*(value * math.sin(half_angle) for value in axis), math.cos(half_angle)]
+
+
+def clip(doc, binary, name, tracks):
+    samplers, channels = [], []
+    for node, path, times, values in tracks:
+        samplers.append({
+            "input": accessor(doc, binary, [(t,) for t in times], "SCALAR", bounds=True),
+            "output": accessor(doc, binary, values, {"rotation": "VEC4", "translation": "VEC3", "weights": "SCALAR"}[path]),
+            "interpolation": "LINEAR",
+        })
+        channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
+    doc.setdefault("animations", []).append({"name": name, "samplers": samplers, "channels": channels})
+
+
+def canopy_geometry(opening, lift=0.0):
     # Each row sets the center and side coordinates of a transverse bow.
     # The edges converge toward the two pivots below the fabric.
-    bows = [
+    extended = [
         (0.278, 0.619, 0.236, 0.367, 0.224),
         (0.264, 0.688, 0.241, 0.404, 0.230),
         (0.136, 0.736, 0.188, 0.435, 0.236),
         (-0.016, 0.712, 0.107, 0.455, 0.234),
         (-0.149, 0.617, 0.015, 0.465, 0.226),
     ]
+    folded = [
+        (0.278, 0.619, 0.236, 0.367, 0.224),
+        (0.279, 0.632, 0.237, 0.373, 0.225),
+        (0.280, 0.644, 0.238, 0.379, 0.226),
+        (0.281, 0.656, 0.239, 0.385, 0.227),
+        (0.282, 0.668, 0.240, 0.391, 0.228),
+    ]
+    bows = []
+    for i, (closed, opened) in enumerate(zip(folded, extended)):
+        cx, cy, sx, sy, width = [a + opening * (b - a) for a, b in zip(closed, opened)]
+        # Intermediate bows swing above the backrest before extending forward.
+        rise = lift * i / (len(extended) - 1)
+        bows.append((cx, cy + rise, sx, sy + rise * 1.15, width))
+    fabric, trim = Geometry(), Geometry()
 
     def arch(bow):
         cx, cy, sx, sy, half_width = bow
@@ -203,10 +233,10 @@ def add_canopy(fabric, trim, shell):
         trim.tube(row, radius, (1.0, 0.0, 0.0))
     for side, edge in ((-1, 0), (1, -1)):
         hinge = (0.152, 0.330, side * 0.221)
-        shell.beam((hinge[0], hinge[1], side * 0.200), (hinge[0], hinge[1], side * 0.237), 0.031)
         trim.tube([row[edge] for row in rows], 0.004, (0.0, 0.0, 1.0))
         for row in (rows[0], rows[-1]):
             trim.beam(hinge, row[edge], 0.006, sides=8)
+    return {"canopy": fabric, "canopy_trim": trim}
 
 
 def rail_point(u, v, z):
@@ -256,11 +286,19 @@ def add_side_mount(panel, mount, latch, adapter, host_z):
 def add_guardrail(rail, pivots):
     side_arm = [(0.081, 0.234, 0.196), (-0.035, 0.294, 0.202),
                 (-0.169, 0.333, 0.202), (-0.201, 0.337, 0.191), (-0.215, 0.337, 0.168)]
-    rail.tube(side_arm + [(x, y, -z) for x, y, z in reversed(side_arm)],
-              0.014, (0.0, 1.0, 0.0), sides=12)
     for side in (-1, 1):
+        rail.tube([(x, y, side * z) for x, y, z in side_arm], 0.014, (0.0, 1.0, 0.0), sides=12)
         x, y, _ = side_arm[0]
         pivots.beam((x, y, side * 0.179), (x, y, side * 0.208), 0.022)
+    x, y, z = side_arm[-1]
+    # The fixed hinge pin is longitudinal, so the crossbar cannot swing
+    # forward toward the canopy on the other seat.
+    pivots.beam((x - 0.007, y, z), (x + 0.011, y, z), 0.019)
+    release = Geometry()
+    release.beam((x - 0.007, y, -z), (x + 0.011, y, -z), 0.018)
+    bar = Geometry()
+    bar.beam((x, y, z), (x, y, -z + 0.020), 0.014)
+    return bar, release, (x, y, z)
 
 
 def add_legrest(support, pad, rear):
@@ -273,89 +311,158 @@ def add_legrest(support, pad, rear):
     angle = math.atan2(dy, dx)
     cx, cy = (start[0] + toe[0]) / 2, (start[1] + toe[1]) / 2
     width = 0.328 if rear else 0.356
+    pad_trim = 0.010
     support.box((cx, cy, 0.0), (length + 0.020, 0.033, width), angle)
-    pad.box((cx - math.sin(angle) * 0.022, cy + math.cos(angle) * 0.022, 0.0),
-            (length - 0.020, 0.015, width - 0.026), angle)
+    pad.box((cx - math.sin(angle) * 0.022 - math.cos(angle) * pad_trim / 2,
+             cy + math.cos(angle) * 0.022 - math.sin(angle) * pad_trim / 2, 0.0),
+            (length - 0.020 - pad_trim, 0.015, width - 0.026), angle)
     support.box((toe[0] - 0.011, toe[1] - 0.004, 0.0), (0.061, 0.023, width))
     pad.box((toe[0] - 0.018, toe[1] + 0.011, 0.0), (0.046, 0.011, width - 0.018))
 
 
-def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
-    groups = {name: Geometry() for name in (
-        "upholstery", "shell", "guardrail", "harness", "mount_cheek", "mounts", "mount_pin", "width_adapter",
-        "legrest_shell", "legrest", "canopy", "canopy_trim",
-    )}
-    soft, shell, harness = (groups[name] for name in ("upholstery", "shell", "harness"))
+MATERIALS = {
+    "upholstery": ([0.105, 0.145, 0.190, 1.0], 0.0, 0.82),
+    "shell": ([0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
+    "guardrail": ([0.43, 0.49, 0.55, 1.0], 0.56, 0.42),
+    "guard_release": ([0.85, 0.45, 0.13, 1.0], 0.08, 0.48),
+    "harness": ([0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
+    "mount_cheek": ([0.155, 0.258, 0.310, 1.0], 0.08, 0.62),
+    "mounts": ([0.190, 0.415, 0.475, 1.0], 0.25, 0.40),
+    "mount_pin": ([0.740, 0.804, 0.833, 1.0], 0.52, 0.34),
+    "width_adapter": ([0.63, 0.32, 0.105, 1.0], 0.26, 0.46),
+    "legrest_shell": ([0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
+    "legrest": ([0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
+    "canopy": ([0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
+    "canopy_trim": ([0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
+}
+AXIS_X = (1.0, 0.0, 0.0)
+AXIS_Z = (0.0, 0.0, 1.0)
+BACK_PIVOT = (0.091, 0.163, 0.0)
+BACK_ANGLES = (0, -5, -10)
+BACK_SLIDES = (0.0, -0.0275, -0.055)
+THREE_STEPS = (0.0, 0.5, 1.0)
 
-    shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
-    soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
-    shell.box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
-    soft.box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
+
+def add_node(doc, **node):
+    index = len(doc["nodes"])
+    doc["nodes"].append(node)
+    return index
+
+
+def mesh_node(doc, binary, name, groups, *, origin=(0.0, 0.0, 0.0), morphs=(), **node):
+    primitives = []
+    existing = {m.get("name"): i for i, m in enumerate(doc["materials"])}
+    for material, geometry in groups.items():
+        if not geometry.vertices:
+            continue
+        material_name = "D02_" + material
+        if material_name not in existing:
+            color, metallic, roughness = MATERIALS[material]
+            existing[material_name] = len(doc["materials"])
+            doc["materials"].append({
+                "name": material_name,
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": color,
+                    "metallicFactor": metallic,
+                    "roughnessFactor": roughness,
+                },
+                "doubleSided": True,
+            })
+        attributes = {
+            "POSITION": accessor(doc, binary, [sub(v, origin) for v in geometry.vertices], "VEC3", vertex=True, bounds=True),
+            "NORMAL": accessor(doc, binary, geometry.normals, "VEC3", vertex=True),
+        }
+        primitive = {"attributes": attributes, "material": existing[material_name], "mode": 4}
+        if morphs:
+            primitive["targets"] = []
+            for target in morphs:
+                if len(target[material].vertices) != len(geometry.vertices):
+                    raise ValueError(f"Mismatched topology in {name} morph")
+                primitive["targets"].append({
+                    "POSITION": accessor(doc, binary, [sub(a,b) for a,b in zip(target[material].vertices, geometry.vertices)],
+                                         "VEC3", vertex=True, bounds=True),
+                    "NORMAL": accessor(doc, binary, [sub(a,b) for a,b in zip(target[material].normals, geometry.normals)],
+                                       "VEC3", vertex=True),
+                })
+        primitives.append(primitive)
+    mesh = {"name": name, "primitives": primitives}
+    if morphs:
+        mesh["weights"] = [0.0] * len(morphs)
+    mesh_id = len(doc["meshes"])
+    doc["meshes"].append(mesh)
+    return add_node(doc, name=name, mesh=mesh_id, **node)
+
+
+def shoulder_straps(angle, slide):
+    harness = Geometry()
+    sine, cosine = math.sin(math.radians(angle)), math.cos(math.radians(angle))
+
+    def follow_back(point):
+        x, y, z = sub(point, BACK_PIVOT)
+        return (x * cosine - y * sine + BACK_PIVOT[0] + slide,
+                x * sine + y * cosine + BACK_PIVOT[1], z)
 
     for side in (-1, 1):
-        soft.box((0.009, 0.199, side * 0.177), (0.180, 0.037, 0.027), math.radians(7))
-        shoulder = (0.128, 0.535, side * 0.097)
-        lower_back = (0.066, 0.320, side * 0.068)
-        buckle = (-0.063, 0.198, side * 0.012)
-        harness.beam(shoulder, lower_back, 0.009, sides=8)
-        harness.beam(lower_back, buckle, 0.009, sides=8)
-        harness.beam((0.026, 0.195, side * 0.180), buckle, 0.009, sides=8)
+        shoulder = follow_back((0.128, 0.535, side * 0.097))
+        lower = follow_back((0.066, 0.320, side * 0.068))
+        harness.beam(shoulder, lower, 0.009, sides=8)
+        harness.beam(lower, (-0.063, 0.198, side * 0.012), 0.009, sides=8)
+    return {"harness": harness}
 
+
+def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
+    base = {key: Geometry() for key in ("upholstery", "shell", "guardrail", "harness", "guard_release")}
+    soft, shell, harness = (base[key] for key in ("upholstery", "shell", "harness"))
+    soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
+    shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
+    for side in (-1, 1):
+        soft.box((0.009, 0.199, side * 0.177), (0.180, 0.037, 0.027), math.radians(7))
+        harness.beam((0.026, 0.195, side * 0.180), (-0.063, 0.198, side * 0.012), 0.009, sides=8)
+        shell.beam((0.152, 0.330, side * 0.195), (0.152, 0.330, side * 0.237), 0.031)
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
-    add_guardrail(groups["guardrail"], shell)
-    add_legrest(groups["legrest_shell"], groups["legrest"], rear)
-    add_canopy(groups["canopy"], groups["canopy_trim"], shell)
-    for geometry in groups.values():
-        geometry.vertices = [(x, y - SEAT_DROP, z) for x, y, z in geometry.vertices]
-    add_side_mount(groups["mount_cheek"], groups["mounts"], groups["mount_pin"], groups["width_adapter"], host_z)
+    crossbar, release, hinge = add_guardrail(base["guardrail"], shell)
+    base["guard_release"] = release
+    bar = mesh_node(doc, binary, name + "_SwingBar", {"guardrail": crossbar}, origin=hinge, translation=hinge)
+    clip(doc, binary, name + "_guardrail", [(bar, "rotation", (0, 1), [rotation(AXIS_X, a) for a in (0, 110)])])
 
-    material_indices = {}
-    for name, color, metallic, roughness in (
-        ("upholstery", [0.105, 0.145, 0.190, 1.0], 0.0, 0.82),
-        ("shell", [0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
-        ("guardrail", [0.43, 0.49, 0.55, 1.0], 0.56, 0.42),
-        ("harness", [0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
-        ("mount_cheek", [0.155, 0.258, 0.310, 1.0], 0.08, 0.62),
-        ("mounts", [0.190, 0.415, 0.475, 1.0], 0.25, 0.40),
-        ("mount_pin", [0.740, 0.804, 0.833, 1.0], 0.52, 0.34),
-        ("width_adapter", [0.63, 0.32, 0.105, 1.0], 0.26, 0.46),
-        ("legrest_shell", [0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
-        ("canopy", [0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
-        ("canopy_trim", [0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
-        ("legrest", [0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
-    ):
-        if not groups[name].vertices:
-            continue
-        material_indices[name] = len(doc["materials"])
-        doc["materials"].append({
-            "name": f"D02_{name}",
-            "pbrMetallicRoughness": {
-                "baseColorFactor": color,
-                "metallicFactor": metallic,
-                "roughnessFactor": roughness,
-            },
-            "doubleSided": True,
-        })
+    canopy = mesh_node(doc, binary, name + "_Canopy", canopy_geometry(1.0), morphs=[
+        canopy_geometry(0), canopy_geometry(1 / 3, 0.115), canopy_geometry(2 / 3, 0.060)
+    ])
+    weights = [(w,) for w in (1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
+    clip(doc, binary, name + "_canopy", [(canopy, "weights", (0, 1 / 3, 2 / 3, 1), weights)])
 
-    primitives = []
-    for name, geometry in groups.items():
-        if not geometry.vertices:
-            continue
-        geometry.vertices = [
-            (x + anchor[0], y + anchor[1], z)
-            for x, y, z in geometry.vertices
-        ]
-        attributes = add_accessors(doc, binary, geometry)
-        primitives.append({"attributes": attributes, "material": material_indices[name], "mode": 4})
+    legs = {key: Geometry() for key in ("legrest_shell", "legrest")}
+    add_legrest(legs["legrest_shell"], legs["legrest"], rear)
+    leg_hinge = (-0.143, 0.109, 0.0)
+    legrest = mesh_node(doc, binary, name + "_Legrest", legs, origin=leg_hinge, translation=leg_hinge)
+    leg_angles = (0, -10, -20) if rear else (0, -16, -32)
+    clip(doc, binary, name + "_legrest", [(legrest, "rotation", THREE_STEPS, [rotation(AXIS_Z, a) for a in leg_angles])])
 
-    mesh_index = len(doc["meshes"])
-    doc["meshes"].append({"name": seat_name, "primitives": primitives})
-    node_index = len(doc["nodes"])
-    doc["nodes"].append({"name": seat_name, "mesh": mesh_index})
-    doc["scenes"][doc.get("scene", 0)]["nodes"].append(node_index)
-    return node_index
+    moving_back = {key: Geometry() for key in ("shell", "upholstery")}
+    moving_back["shell"].box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
+    moving_back["upholstery"].box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
+    backrest = mesh_node(doc, binary, name + "_Backrest", moving_back, origin=BACK_PIVOT, translation=BACK_PIVOT)
+    straps = mesh_node(doc, binary, name + "_ShoulderStraps", shoulder_straps(0, 0),
+                       morphs=[shoulder_straps(a, s) for a, s in zip(BACK_ANGLES[1:], BACK_SLIDES[1:])])
+    clip(doc, binary, name + "_backrest", [
+        (backrest, "rotation", THREE_STEPS, [rotation(AXIS_Z, a) for a in BACK_ANGLES]),
+        (backrest, "translation", THREE_STEPS, [(BACK_PIVOT[0] + x, *BACK_PIVOT[1:]) for x in BACK_SLIDES]),
+        (straps, "weights", THREE_STEPS, [(w,) for w in (0, 0, 1, 0, 0, 1)]),
+    ])
+
+    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP, 0.0),
+                     children=[bar, canopy, legrest, backrest, straps])
+    mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
+    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z)
+    angle, ground = level
+    c, s = math.cos(angle), math.sin(angle)
+    x, y = anchor
+    root = mesh_node(doc, binary, name, mounts, children=[seat],
+                     translation=(c*x - s*y, s*x + c*y - ground, 0.0),
+                     rotation=rotation(AXIS_Z, math.degrees(angle)))
+    doc["scenes"][doc.get("scene", 0)]["nodes"].append(root)
 
 
 def port_position(doc, port):
@@ -379,9 +486,9 @@ def main():
             doc, binary = prepare_chassis(width, wheel)
             lower, lower_span = port_position(doc, "L")
             upper, upper_span = port_position(doc, "H")
-            make_seat(doc, binary, "D02_Front", lower, lower_span)
-            make_seat(doc, binary, "D02_Rear", upper, upper_span, rear=True)
-            level_assembly(doc, binary)
+            level = level_assembly(doc, binary)
+            make_seat(doc, binary, "D02_Front", lower, lower_span, level)
+            make_seat(doc, binary, "D02_Rear", upper, upper_span, level, rear=True)
             output = output_dir / f"D02_w{width}_state1_wheel_{wheel}.glb"
             write_glb(output, doc, binary)
             print(f"Created {output.relative_to(ROOT)} ({output.stat().st_size} bytes)")

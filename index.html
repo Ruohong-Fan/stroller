@@ -64,6 +64,8 @@
       box-shadow: 0 8px 20px -4px rgba(24, 24, 27, 0.22);
     }
 
+    #d02-states button:disabled { opacity: 0.45; cursor: not-allowed; }
+
     input[type=range].studio-slider {
       -webkit-appearance: none;
       appearance: none;
@@ -213,6 +215,12 @@
       <button id="posture-5" onclick="setPosture(5)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸横杆</button>
       <button id="posture-6" onclick="setPosture(6)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">横杆&车轮均拆</button>
     </div>
+  </section>
+
+  <section id="d02-states" class="hidden space-y-3 pt-3 border-t border-zinc-200/70" aria-labelledby="d02-states-heading">
+    <h2 id="d02-states-heading" class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">04 · States</h2>
+    <div id="d02-seat-controls" class="space-y-3"></div>
+    <p id="d02-states-status" class="hidden text-[11px] text-zinc-500" role="status"></p>
   </section>
 
 </aside>
@@ -411,10 +419,13 @@ async function loadCadAsset(logicalKey, relativePathsWithoutExt) {
         if (!headRes.ok) continue;
 
         let loadedGroup = null;
+        let animations = [];
         if (ext === '.glb' || ext === '.gltf') {
-          loadedGroup = await new Promise((resolve, reject) => {
-            gltfLoader.load(url, (gltf) => resolve(gltf.scene), undefined, reject);
+          const gltf = await new Promise((resolve, reject) => {
+            gltfLoader.load(url, resolve, undefined, reject);
           });
+          loadedGroup = gltf.scene;
+          animations = gltf.animations || [];
         } else if (ext === '.step' || ext === '.stp') {
           const res = await fetch(url);
           const buffer = new Uint8Array(await res.arrayBuffer());
@@ -428,6 +439,7 @@ async function loadCadAsset(logicalKey, relativePathsWithoutExt) {
           cadAssetCache.set(logicalKey, {
             status: 'loaded',
             group: loadedGroup,
+            animations,
             ext,
             foundPath: `models/${relPath}${ext}`
           });
@@ -620,14 +632,144 @@ const strollerRoot = new THREE.Group();
 scene.add(strollerRoot);
 
 // ============================================================================
+// D02: sample the model's independent animation clips at discrete positions.
+// ============================================================================
+const D02_COMPONENTS = [
+  { key: 'guardrail', label: '护栏', positions: ['闭合', '打开'], initial: 0 },
+  { key: 'canopy', label: '顶篷', positions: ['收合', '1 档', '2 档', '3 档'], initial: 3 },
+  { key: 'legrest', label: '腿托', positions: ['1 · 低', '2 · 中', '3 · 高'], initial: 0 },
+  { key: 'backrest', label: '靠背', positions: ['1 · 直立', '2 · 中躺', '3 · 后仰'], initial: 0 }
+];
+const d02ControlRows = new Map();
+let d02Mixer = null;
+
+function buildD02StateControls() {
+  const container = document.getElementById('d02-seat-controls');
+  for (const [seat, seatLabel] of [['Front', '前座'], ['Rear', '后座']]) {
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'min-w-0 space-y-1.5 p-2.5 rounded-xl border border-zinc-200/80';
+    const legend = document.createElement('legend');
+    legend.className = 'px-1 text-xs font-semibold text-zinc-800';
+    legend.textContent = seatLabel;
+    fieldset.appendChild(legend);
+
+    for (const component of D02_COMPONENTS) {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', `${seatLabel}${component.label}`);
+      const label = document.createElement('span');
+      label.className = 'w-8 shrink-0 text-[11px] text-zinc-600';
+      label.textContent = component.label;
+      row.appendChild(label);
+
+      const control = { buttons: [], index: component.initial, action: null, transition: null };
+      component.positions.forEach((position, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.id = `d02-${seat.toLowerCase()}-${component.key}-${index}`;
+        button.className = 'card-btn min-h-[28px] flex-1 px-0.5 rounded-lg text-[11px] font-medium';
+        button.textContent = position;
+        button.addEventListener('click', () => setD02Position(control, index));
+        control.buttons.push(button);
+        row.appendChild(button);
+      });
+      d02ControlRows.set(`D02_${seat}_${component.key}`, control);
+      fieldset.appendChild(row);
+    }
+    container.appendChild(fieldset);
+  }
+}
+
+function updateD02StateControls(loading = false) {
+  const panel = document.getElementById('d02-states');
+  const visible = state.cabinMode === 'double' && state.selectedId === 'D02';
+  panel.classList.toggle('hidden', !visible);
+  if (!visible) return;
+
+  let availableRows = 0;
+  for (const control of d02ControlRows.values()) {
+    if (control.action) availableRows++;
+    control.buttons.forEach((button, index) => {
+      const selected = Boolean(control.action) && index === control.index;
+      button.disabled = loading || !control.action;
+      button.classList.toggle('card-active', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+  }
+
+  const status = document.getElementById('d02-states-status');
+  if (loading) status.textContent = '正在载入可调状态…';
+  else if (!availableRows) status.textContent = '此模型暂未提供可调状态。';
+  else if (availableRows < d02ControlRows.size) status.textContent = '此模型的部分动作暂不可用。';
+  else status.textContent = '';
+  status.classList.toggle('hidden', !status.textContent);
+}
+
+function d02PositionTime(control) {
+  return control.action.getClip().duration * control.index / (control.buttons.length - 1);
+}
+
+function bindD02PoseModel(model, animations) {
+  if (d02Mixer) {
+    d02Mixer.stopAllAction();
+    d02Mixer.uncacheRoot(d02Mixer.getRoot());
+  }
+  d02Mixer = model && animations.length ? new THREE.AnimationMixer(model) : null;
+  const clips = new Map(animations.map(clip => [clip.name, clip]));
+  for (const [name, control] of d02ControlRows) {
+    const clip = clips.get(name);
+    control.action = null;
+    control.transition = null;
+    if (!d02Mixer || !clip || clip.duration <= 0) continue;
+    const action = d02Mixer.clipAction(clip);
+    action.paused = true;
+    action.play();
+    control.action = action;
+    action.time = d02PositionTime(control);
+  }
+  if (d02Mixer) d02Mixer.update(0);
+  updateD02StateControls();
+}
+
+function setD02Position(control, index) {
+  if (control.buttons[index].disabled || index === control.index) return;
+  control.index = index;
+  control.transition = {
+    start: performance.now(),
+    from: control.action.time,
+    to: d02PositionTime(control)
+  };
+  updateD02StateControls();
+}
+
+function animateD02Poses(now) {
+  if (!d02Mixer) return;
+  let updated = false;
+  for (const control of d02ControlRows.values()) {
+    const transition = control.transition;
+    if (!transition) continue;
+    const progress = Math.max(0, Math.min(1, (now - transition.start) / 300));
+    const eased = progress * progress * (3 - 2 * progress);
+    control.action.time = transition.from + (transition.to - transition.from) * eased;
+    if (progress === 1) control.transition = null;
+    updated = true;
+  }
+  if (updated) d02Mixer.update(0);
+}
+
+// ============================================================================
 // 4. 纯 CAD 渲染引擎 (绝不绘制任何内置几何体)
 // ============================================================================
 let renderToken = 0;
 
 async function updateScene() {
   const currentToken = ++renderToken;
+  updateD02StateControls(true);
 
   const nextGroup = new THREE.Group();
+  let d02Model = null;
+  let d02Animations = [];
 
   // 1) 纯车架模式 (no_cabin) 或 带座舱模式
   if (state.cabinMode === 'none') {
@@ -657,13 +799,20 @@ async function updateScene() {
     } else if (state.cabinMode === 'double') {
       const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
       if (dSpec) {
+        const cacheKey = getCabinCacheKey('double', dSpec.id);
         const doubleModel = await loadCadAsset(
-          getCabinCacheKey('double', dSpec.id),
+          cacheKey,
           getCabinPaths('double', dSpec.id)
         );
         if (currentToken !== renderToken) return;
 
-        if (doubleModel) nextGroup.add(doubleModel);
+        if (doubleModel) {
+          nextGroup.add(doubleModel);
+          if (dSpec.id === 'D02') {
+            d02Model = doubleModel;
+            d02Animations = cadAssetCache.get(cacheKey)?.animations || [];
+          }
+        }
       }
     }
 
@@ -691,6 +840,7 @@ async function updateScene() {
     }
   }
 
+  bindD02PoseModel(d02Model, d02Animations);
   replaceStrollerRoot(nextGroup);
   updateInfoPanel();
 }
@@ -965,6 +1115,8 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+buildD02StateControls();
+
 // A D02 review link can open a specific width and wheelset directly.
 const d02Preset = /^(550|650)([SML])$/.exec(new URLSearchParams(window.location.search).get('d02') || '');
 if (d02Preset) {
@@ -976,8 +1128,9 @@ if (d02Preset) {
   setCabinMode('single');
 }
 
-function animate() {
+function animate(now = performance.now()) {
   requestAnimationFrame(animate);
+  animateD02Poses(now);
   controls.update();
   renderer.render(scene, camera);
 }

@@ -120,7 +120,7 @@ def prepare_chassis(width: int, wheel: str) -> tuple[dict, bytearray]:
     return doc, binary
 
 
-def level_assembly(doc: dict, binary: bytearray) -> None:
+def level_assembly(doc: dict, binary: bytearray) -> tuple[float, float]:
     """Put the front and rear tread planes at zero while keeping all joints fixed."""
     def tire_positions(prefix):
         node = next(node for node in doc["nodes"] if node["name"].startswith(prefix))
@@ -143,7 +143,7 @@ def level_assembly(doc: dict, binary: bytearray) -> None:
     angle = (low + high) / 2
     height = min(lowest_point(front_tread, angle), lowest_point(rear_tread, angle))
     if abs(angle) < 1e-6 and abs(height) < 1e-6:
-        return
+        return 0.0, 0.0
 
     sine, cosine = math.sin(angle), math.cos(angle)
     positions, normals = set(), set()
@@ -167,3 +167,4 @@ def level_assembly(doc: dict, binary: bytearray) -> None:
             n[0] * sine + n[1] * cosine,
             n[2],
         ))
+    return angle, height
