@@ -7,12 +7,13 @@ import math
 import pathlib
 import struct
 
-from generate_wheel_variants import write_glb
+from generate_wheel_variants import read_positions, write_glb
 from prepare_d02_chassis import prepare_chassis, level_assembly
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SEAT_DROP = 0.085
+FRONT_RECLINE_DROP = 0.065
 STANDARD_MOUNT_Z = 0.220
 RAIL_ANGLE = math.radians(37)
 
@@ -199,7 +200,9 @@ def canopy_geometry(opening, lift=0.0):
         cx, cy, sx, sy, width = [a + opening * (b - a) for a, b in zip(closed, opened)]
         # Intermediate bows swing above the backrest before extending forward.
         rise = lift * i / (len(extended) - 1)
-        bows.append((cx, cy + rise, sx, sy + rise * 1.15, width))
+        # Keep the arches above the sweep of the bottom-hinged backrest.
+        # The lower side attachment points stay in their original sockets.
+        bows.append((cx, cy + rise + 0.067, sx, sy + rise * 1.15 + 0.067, width))
     fabric, trim = Geometry(), Geometry()
 
     def arch(bow):
@@ -261,12 +264,13 @@ def add_socket(socket, latch, side, center_z):
     )
 
 
-def add_side_mount(panel, mount, latch, adapter, host_z):
+def add_side_mount(panel, mount, latch, adapter, host_z, panel_drop=0.0):
     for side in (-1, 1):
         # One molded side panel is both the low sidewall and the socket support.
+        profile = [(-0.174, 0.055), (-0.174, 0.108), (0.078, 0.145), (0.110, 0.117),
+                   (0.078, 0.061), (-0.030, 0.018), (-0.125, 0.026)]
         panel.side_cheek(
-            [(-0.174, 0.055), (-0.174, 0.108), (0.078, 0.145), (0.110, 0.117),
-             (0.078, 0.061), (-0.030, 0.018), (-0.125, 0.026)],
+            [(x, y - panel_drop) for x, y in profile],
             side * 0.191,
             0.020,
         )
@@ -376,12 +380,14 @@ MATERIALS = {
     "legrest": ([0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
     "canopy": ([0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
     "canopy_trim": ([0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
+    "canopy_stay": ([0.112, 0.177, 0.212, 1.0], 0.10, 0.60),
 }
 AXIS_X = (1.0, 0.0, 0.0)
 AXIS_Z = (0.0, 0.0, 1.0)
 BACK_PIVOT = (0.091, 0.163, 0.0)
-BACK_ANGLES = (0, -5, -10)
-BACK_SLIDES = (0.0, -0.0275, -0.055)
+BACK_DEGREES = (95, 115, 135, 155, 175)
+BACK_ROTATIONS = tuple(106 - degrees for degrees in BACK_DEGREES)
+BACK_TIMES = (0, 0.25, 0.5, 0.75, 1)
 THREE_STEPS = (0.0, 0.5, 1.0)
 
 
@@ -435,13 +441,13 @@ def mesh_node(doc, binary, name, groups, *, origin=(0.0, 0.0, 0.0), morphs=(), *
     return add_node(doc, name=name, mesh=mesh_id, **node)
 
 
-def shoulder_straps(angle, slide):
+def shoulder_straps(angle):
     harness = Geometry()
     sine, cosine = math.sin(math.radians(angle)), math.cos(math.radians(angle))
 
     def follow_back(point):
         x, y, z = sub(point, BACK_PIVOT)
-        return (x * cosine - y * sine + BACK_PIVOT[0] + slide,
+        return (x * cosine - y * sine + BACK_PIVOT[0],
                 x * sine + y * cosine + BACK_PIVOT[1], z)
 
     for side in (-1, 1):
@@ -452,15 +458,46 @@ def shoulder_straps(angle, slide):
     return {"harness": harness}
 
 
+def handle_extension(doc, binary, level):
+    """Telescoping handle motion keyed ahead of the deep rear recline."""
+    angle, _ = level
+    c, s = math.cos(angle), math.sin(angle)
+    reach = (c * 0.200 - s * 0.154, s * 0.200 + c * 0.154, 0.0)
+    forward = unit(reach)
+    times = (0, 0.16, 0.43, 1)
+    tracks = []
+    for index, node in enumerate(doc["nodes"]):
+        label = node.get("name", "")
+        if label.startswith(("round_handle.", "ground_pad_")):
+            tracks.append((index, "translation", times, [(0.0, 0.0, 0.0)] * 2 + [reach] * 2))
+        elif label.startswith("handle_slider_"):
+            mesh = doc["meshes"][node["mesh"]]
+            mesh["weights"] = [0.0]
+            for primitive in mesh["primitives"]:
+                positions = read_positions(doc, binary, primitive["attributes"]["POSITION"])
+                projection = [sum(v[i] * forward[i] for i in range(3)) for v in positions]
+                lo, hi = min(projection), max(projection)
+                steps = [(p - lo) / (hi - lo) for p in projection]
+                offsets = [tuple(r * t for r in reach) for t in steps]
+                primitive["targets"] = [{"POSITION": accessor(doc, binary, offsets, "VEC3", vertex=True, bounds=True)}]
+            tracks.append((index, "weights", times, [(0.0,), (0.0,), (1.0,), (1.0,)]))
+    return tracks
+
+
 def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
-    base = {key: Geometry() for key in ("upholstery", "shell", "guard_dock", "harness", "guard_release")}
+    base = {key: Geometry() for key in ("upholstery", "shell", "guard_dock", "harness", "guard_release", "canopy_stay")}
     soft, shell, harness = (base[key] for key in ("upholstery", "shell", "harness"))
     soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
     shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
     for side in (-1, 1):
         soft.box((0.009, 0.199, side * 0.177), (0.180, 0.037, 0.027), math.radians(7))
         harness.beam((0.026, 0.195, side * 0.180), (-0.063, 0.198, side * 0.012), 0.009, sides=8)
-        shell.beam((0.152, 0.330, side * 0.195), (0.152, 0.330, side * 0.237), 0.031)
+        stay = base["canopy_stay"]
+        stay.tube([(x, y, side * z) for x, y, z in (
+            (0.006, 0.171, 0.191), (0.006, 0.213, 0.191), (0.029, 0.240, 0.215),
+            (0.087, 0.270, 0.220), (0.152, 0.330, 0.221),
+        )], 0.010, AXIS_Z)
+        stay.beam((0.152, 0.330, side * 0.205), (0.152, 0.330, side * 0.237), 0.031)
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
@@ -476,25 +513,32 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
     add_legrest(legs["legrest_shell"], legs["legrest"], rear)
     leg_hinge = (-0.143, 0.109, 0.0)
     legrest = mesh_node(doc, binary, name + "_Legrest", legs, origin=leg_hinge, translation=leg_hinge)
-    leg_angles = (0, -10, -20) if rear else (0, -16, -32)
-    clip(doc, binary, name + "_legrest", [(legrest, "rotation", THREE_STEPS, [rotation(AXIS_Z, a) for a in leg_angles])])
+    # The rear legrest has a fourth, under-seat position for front recline.
+    leg_angles = (0, -10, -20, 93) if rear else (0, -16, -32)
+    leg_times = (0, 0.25, 0.5, 1) if rear else THREE_STEPS
+    clip(doc, binary, name + "_legrest", [(legrest, "rotation", leg_times, [rotation(AXIS_Z, a) for a in leg_angles])])
 
     moving_back = {key: Geometry() for key in ("shell", "upholstery")}
     moving_back["shell"].box((0.151, 0.384, 0.0), (0.062, 0.445, 0.394), -math.radians(16))
     moving_back["upholstery"].box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
-    backrest = mesh_node(doc, binary, name + "_Backrest", moving_back, origin=BACK_PIVOT, translation=BACK_PIVOT)
-    straps = mesh_node(doc, binary, name + "_ShoulderStraps", shoulder_straps(0, 0),
-                       morphs=[shoulder_straps(a, s) for a, s in zip(BACK_ANGLES[1:], BACK_SLIDES[1:])])
-    clip(doc, binary, name + "_backrest", [
-        (backrest, "rotation", THREE_STEPS, [rotation(AXIS_Z, a) for a in BACK_ANGLES]),
-        (backrest, "translation", THREE_STEPS, [(BACK_PIVOT[0] + x, *BACK_PIVOT[1:]) for x in BACK_SLIDES]),
-        (straps, "weights", THREE_STEPS, [(w,) for w in (0, 0, 1, 0, 0, 1)]),
-    ])
+    backrest = mesh_node(doc, binary, name + "_Backrest", moving_back, origin=BACK_PIVOT, translation=BACK_PIVOT,
+                         rotation=rotation(AXIS_Z, BACK_ROTATIONS[0]))
+    straps = mesh_node(doc, binary, name + "_ShoulderStraps", shoulder_straps(BACK_ROTATIONS[0]),
+                       morphs=[shoulder_straps(a) for a in BACK_ROTATIONS[1:]])
+    strap_weights = [(1.0 if key == target else 0.0,) for key in range(5) for target in range(1, 5)]
+    back_tracks = [
+        (backrest, "rotation", BACK_TIMES, [rotation(AXIS_Z, a) for a in BACK_ROTATIONS]),
+        (straps, "weights", BACK_TIMES, strap_weights),
+    ]
+    if rear:
+        back_tracks.extend(handle_extension(doc, binary, level))
+    clip(doc, binary, name + "_backrest", back_tracks)
 
-    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP, 0.0),
+    panel_drop = 0.0 if rear else FRONT_RECLINE_DROP
+    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP - panel_drop, 0.0),
                      children=[bar, canopy, legrest, backrest, straps])
     mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
-    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z)
+    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z, panel_drop)
     angle, ground = level
     c, s = math.cos(angle), math.sin(angle)
     x, y = anchor
