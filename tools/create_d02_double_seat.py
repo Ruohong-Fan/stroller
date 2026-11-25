@@ -17,6 +17,8 @@ SEAT_DROP = 0.085
 FRONT_RECLINE_DROP = 0.065
 FRONT_PORT_ADVANCE = 0.150
 FRONT_PORT_DROP = 0.080
+REAR_SEAT_DROP = 0.060
+REAR_SEAT_SETBACK = 0.060
 STANDARD_MOUNT_Z = 0.220
 RAIL_ANGLE = math.radians(37)
 
@@ -269,13 +271,13 @@ def add_socket(socket, latch, side, center_z):
     )
 
 
-def add_side_mount(panel, mount, latch, adapter, host_z, panel_drop=0.0):
+def add_side_mount(panel, mount, latch, adapter, host_z, panel_drop, setback):
     for side in (-1, 1):
         # One molded side panel is both the low sidewall and the socket support.
         profile = [(-0.174, 0.055), (-0.174, 0.108), (0.078, 0.145), (0.110, 0.117),
                    (0.078, 0.061), (-0.030, 0.018), (-0.125, 0.026)]
         panel.side_cheek(
-            [(x, y - panel_drop) for x, y in profile],
+            [(x + setback, y - panel_drop) for x, y in profile],
             side * 0.191,
             0.020,
         )
@@ -649,11 +651,16 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
         back_tracks.extend(handle_extension(doc, binary, level))
     clip(doc, binary, name + "_backrest", back_tracks)
 
-    panel_drop = 0.0 if rear else FRONT_RECLINE_DROP
-    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(0.0, -SEAT_DROP - panel_drop, 0.0),
+    # Drop the rear bucket within the molded side panels. Its aft offset
+    # preserves travel room for the front canopy and folded rear legrest.
+    # The two sockets still mate with the original chassis receivers.
+    panel_drop = REAR_SEAT_DROP if rear else FRONT_RECLINE_DROP
+    setback = REAR_SEAT_SETBACK if rear else 0.0
+    seat = mesh_node(doc, binary, name + "_Shell", base, translation=(setback, -SEAT_DROP - panel_drop, 0.0),
                      children=[bar, legrest, legrest_mount, knee, backrest, straps, hip])
     mounts = {key: Geometry() for key in ("mount_cheek", "mounts", "mount_pin", "width_adapter")}
-    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"], host_z, panel_drop)
+    add_side_mount(mounts["mount_cheek"], mounts["mounts"], mounts["mount_pin"], mounts["width_adapter"],
+                   host_z, panel_drop, setback)
     angle, ground = level
     c, s = math.cos(angle), math.sin(angle)
     x, y = anchor
