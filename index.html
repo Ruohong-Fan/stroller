@@ -922,14 +922,16 @@ function updateInfoPanel() {
     document.getElementById('spec-posture').textContent = `${d.portLabel} 接口`;
     document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
     document.getElementById('spec-title').textContent = d.name;
-    const conceptNote = isD02 && isLoaded
-      ? ' 两座均配有腿托、顶篷和侧面一体式卡座。座舱为概念设计，车架沿用 CAD。'
-      : '';
+    let description = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。`;
     if (isD02 && isLoaded) {
+      const mountNote = state.frameWidth === 650
+        ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。'
+        : '中档通过座舱两侧的一体式卡座直接连接车架。';
+      description += ` 两座均配有腿托和顶篷。${mountNote}座舱为概念设计，车架沿用 CAD。`;
       const modelSize = new THREE.Box3().setFromObject(cached.group).getSize(new THREE.Vector3());
       document.getElementById('spec-total-width').textContent = `约 ${Math.round(modelSize.z)} mm (${wheelSpec.name})`;
     }
-    document.getElementById('spec-desc').textContent = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。${conceptNote}`;
+    document.getElementById('spec-desc').textContent = description;
     pathEl.textContent = isLoaded
       ? `已加载: ${cached.foundPath}`
       : `查找路径: ${getCabinPaths('double', d.id).map(path => `models/${path}`).join('、')}`;

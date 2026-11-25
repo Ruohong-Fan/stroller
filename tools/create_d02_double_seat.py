@@ -12,6 +12,9 @@ from prepare_d02_chassis import prepare_chassis, level_assembly
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+SEAT_DROP = 0.085
+STANDARD_MOUNT_Z = 0.220
+RAIL_ANGLE = math.radians(37)
 
 
 def unit(v):
@@ -206,21 +209,58 @@ def add_canopy(fabric, trim, shell):
             trim.beam(hinge, row[edge], 0.006, sides=8)
 
 
-def add_side_mount(cheek, mount, latch, host_z):
-    rail_angle = math.radians(37)
+def rail_point(u, v, z):
+    cosine, sine = math.cos(RAIL_ANGLE), math.sin(RAIL_ANGLE)
+    return u * cosine - v * sine, u * sine + v * cosine, z
+
+
+def rail_box(geometry, u, v, z, dims):
+    geometry.box(rail_point(u, v, z), dims, RAIL_ANGLE)
+
+
+def add_socket(socket, latch, side, center_z):
+    rail_box(socket, 0.003, 0.037, side * center_z, (0.112, 0.026, 0.046))
+    # The center remains open from below. A shallow pad locates the insert.
+    rail_box(socket, -0.010, 0.023, side * center_z, (0.028, 0.008, 0.022))
+    for wall in (-1, 1):
+        rail_box(socket, 0.003, 0.008, side * center_z + wall * 0.020, (0.112, 0.053, 0.006))
+    latch.beam(
+        rail_point(0.003, 0.009, side * (center_z + 0.021)),
+        rail_point(0.003, 0.009, side * (center_z + 0.026)),
+        0.014,
+    )
+
+
+def add_side_mount(panel, mount, latch, adapter, host_z):
     for side in (-1, 1):
-        # The center of this channel stays open for the existing host and rail.
-        cheek.side_cheek(
-            [(-0.103, 0.142), (0.100, 0.160), (0.062, 0.084), (-0.039, 0.033)],
-            side * (0.183 + host_z + 0.006) / 2,
-            host_z + 0.006 - 0.183,
+        # One molded side panel is both the low sidewall and the socket support.
+        panel.side_cheek(
+            [(-0.110, 0.078), (-0.075, 0.127), (0.078, 0.145), (0.110, 0.117),
+             (0.078, 0.061), (-0.030, 0.018), (-0.085, 0.026)],
+            side * 0.191,
+            0.020,
         )
-        mount.box((-0.020, 0.031, side * host_z), (0.112, 0.026, 0.062), rail_angle)
-        # A shallow locating pad seats on the receiver without filling the slot.
-        mount.box((-0.022, 0.012, side * host_z), (0.028, 0.008, 0.022), rail_angle)
-        for wall in (-1, 1):
-            mount.box((-0.003, 0.008, side * host_z + wall * 0.024), (0.112, 0.053, 0.014), rail_angle)
-        latch.beam((-0.003, 0.010, side * (host_z + 0.029)), (-0.003, 0.010, side * (host_z + 0.038)), 0.016)
+        add_socket(mount, latch, side, STANDARD_MOUNT_Z)
+
+        # Wide chassis: a tongue plugs into the standard socket from below.
+        # Its offset bridge carries a second socket over the actual frame port.
+        offset = host_z - STANDARD_MOUNT_Z
+        if offset > 0.001:
+            add_socket(adapter, latch, side, host_z)
+            rail_box(adapter, -0.002, -0.004, side * STANDARD_MOUNT_Z, (0.060, 0.051, 0.026))
+            rail_box(adapter, -0.002, -0.028, side * (STANDARD_MOUNT_Z + (offset - 0.016) / 2),
+                     (0.062, 0.017, offset - 0.004))
+            rail_box(adapter, -0.002, -0.015, side * (host_z - 0.020), (0.062, 0.013, 0.007))
+
+
+def add_guardrail(rail, pivots):
+    side_arm = [(0.081, 0.234, 0.196), (-0.035, 0.294, 0.202),
+                (-0.169, 0.333, 0.202), (-0.201, 0.337, 0.191), (-0.215, 0.337, 0.168)]
+    rail.tube(side_arm + [(x, y, -z) for x, y, z in reversed(side_arm)],
+              0.014, (0.0, 1.0, 0.0), sides=12)
+    for side in (-1, 1):
+        x, y, _ = side_arm[0]
+        pivots.beam((x, y, side * 0.179), (x, y, side * 0.208), 0.022)
 
 
 def add_legrest(support, pad, rear):
@@ -242,10 +282,10 @@ def add_legrest(support, pad, rear):
 
 def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
     groups = {name: Geometry() for name in (
-        "upholstery", "shell", "frame", "harness", "mount_cheek", "mounts", "mount_pin",
+        "upholstery", "shell", "guardrail", "harness", "mount_cheek", "mounts", "mount_pin", "width_adapter",
         "legrest_shell", "legrest", "canopy", "canopy_trim",
     )}
-    soft, shell, frame, harness = (groups[name] for name in ("upholstery", "shell", "frame", "harness"))
+    soft, shell, harness = (groups[name] for name in ("upholstery", "shell", "harness"))
 
     shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
     soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
@@ -253,10 +293,7 @@ def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
     soft.box((0.111, 0.391, 0.0), (0.045, 0.425, 0.378), -math.radians(16))
 
     for side in (-1, 1):
-        zz = side * 0.196
-        soft.box((-0.005, 0.222, zz), (0.32, 0.120, 0.045), math.radians(7))
-        frame.beam((-0.158, 0.251, zz), (0.111, 0.283, zz), 0.011)
-        frame.beam((-0.168, 0.305, side * 0.178), (-0.116, 0.265, zz), 0.013)
+        soft.box((0.009, 0.199, side * 0.177), (0.180, 0.037, 0.027), math.radians(7))
         shoulder = (0.128, 0.535, side * 0.097)
         lower_back = (0.066, 0.320, side * 0.068)
         buckle = (-0.063, 0.198, side * 0.012)
@@ -264,28 +301,33 @@ def make_seat(doc, binary, seat_name, anchor, host_z, rear=False):
         harness.beam(lower_back, buckle, 0.009, sides=8)
         harness.beam((0.026, 0.195, side * 0.180), buckle, 0.009, sides=8)
 
-    frame.beam((-0.168, 0.305, -0.178), (-0.168, 0.305, 0.178), 0.016)
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
-    add_side_mount(groups["mount_cheek"], groups["mounts"], groups["mount_pin"], host_z)
+    add_guardrail(groups["guardrail"], shell)
     add_legrest(groups["legrest_shell"], groups["legrest"], rear)
     add_canopy(groups["canopy"], groups["canopy_trim"], shell)
+    for geometry in groups.values():
+        geometry.vertices = [(x, y - SEAT_DROP, z) for x, y, z in geometry.vertices]
+    add_side_mount(groups["mount_cheek"], groups["mounts"], groups["mount_pin"], groups["width_adapter"], host_z)
 
     material_indices = {}
     for name, color, metallic, roughness in (
         ("upholstery", [0.105, 0.145, 0.190, 1.0], 0.0, 0.82),
         ("shell", [0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
-        ("frame", [0.43, 0.49, 0.55, 1.0], 0.68, 0.34),
+        ("guardrail", [0.43, 0.49, 0.55, 1.0], 0.56, 0.42),
         ("harness", [0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
         ("mount_cheek", [0.155, 0.258, 0.310, 1.0], 0.08, 0.62),
         ("mounts", [0.190, 0.415, 0.475, 1.0], 0.25, 0.40),
         ("mount_pin", [0.740, 0.804, 0.833, 1.0], 0.52, 0.34),
+        ("width_adapter", [0.63, 0.32, 0.105, 1.0], 0.26, 0.46),
         ("legrest_shell", [0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
         ("canopy", [0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
         ("canopy_trim", [0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
         ("legrest", [0.24, 0.32, 0.40, 1.0], 0.0, 0.82),
     ):
+        if not groups[name].vertices:
+            continue
         material_indices[name] = len(doc["materials"])
         doc["materials"].append({
             "name": f"D02_{name}",
