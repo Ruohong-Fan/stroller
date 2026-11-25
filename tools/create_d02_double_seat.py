@@ -167,11 +167,11 @@ def rotation(axis, angle):
 
 def clip(doc, binary, name, tracks):
     samplers, channels = [], []
-    for node, path, times, values in tracks:
+    for node, path, times, values, *interpolation in tracks:
         samplers.append({
             "input": accessor(doc, binary, [(t,) for t in times], "SCALAR", bounds=True),
-            "output": accessor(doc, binary, values, {"rotation": "VEC4", "translation": "VEC3", "weights": "SCALAR"}[path]),
-            "interpolation": "LINEAR",
+            "output": accessor(doc, binary, values, {"rotation": "VEC4", "translation": "VEC3", "scale": "VEC3", "weights": "SCALAR"}[path]),
+            "interpolation": interpolation[0] if interpolation else "LINEAR",
         })
         channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
     doc.setdefault("animations", []).append({"name": name, "samplers": samplers, "channels": channels})
@@ -265,8 +265,8 @@ def add_side_mount(panel, mount, latch, adapter, host_z):
     for side in (-1, 1):
         # One molded side panel is both the low sidewall and the socket support.
         panel.side_cheek(
-            [(-0.110, 0.078), (-0.075, 0.127), (0.078, 0.145), (0.110, 0.117),
-             (0.078, 0.061), (-0.030, 0.018), (-0.085, 0.026)],
+            [(-0.174, 0.055), (-0.174, 0.108), (0.078, 0.145), (0.110, 0.117),
+             (0.078, 0.061), (-0.030, 0.018), (-0.125, 0.026)],
             side * 0.191,
             0.020,
         )
@@ -283,22 +283,63 @@ def add_side_mount(panel, mount, latch, adapter, host_z):
             rail_box(adapter, -0.002, -0.015, side * (host_z - 0.020), (0.062, 0.013, 0.007))
 
 
-def add_guardrail(rail, pivots):
-    side_arm = [(0.081, 0.234, 0.196), (-0.035, 0.294, 0.202),
-                (-0.169, 0.333, 0.202), (-0.201, 0.337, 0.191), (-0.215, 0.337, 0.168)]
-    for side in (-1, 1):
-        rail.tube([(x, y, side * z) for x, y, z in side_arm], 0.014, (0.0, 1.0, 0.0), sides=12)
-        x, y, _ = side_arm[0]
-        pivots.beam((x, y, side * 0.179), (x, y, side * 0.208), 0.022)
-    x, y, z = side_arm[-1]
-    # The fixed hinge pin is longitudinal, so the crossbar cannot swing
-    # forward toward the canopy on the other seat.
-    pivots.beam((x - 0.007, y, z), (x + 0.011, y, z), 0.019)
-    release = Geometry()
-    release.beam((x - 0.007, y, -z), (x + 0.011, y, -z), 0.018)
-    bar = Geometry()
-    bar.beam((x, y, z), (x, y, -z + 0.020), 0.014)
-    return bar, release, (x, y, z)
+def guard_cradle(geometry, center):
+    """Low, open-top dock. The free terminal leaves it upward."""
+    x, y, z = center
+    arcs = []
+    for end in (x - 0.007, x + 0.007):
+        rings = []
+        for radius in (0.023, 0.016):
+            rings.append([
+                (end, y - radius * math.sin(math.pi * i / 12), z + radius * math.cos(math.pi * i / 12))
+                for i in range(13)
+            ])
+        arcs.append(rings)
+    (outer_start, inner_start), (outer_end, inner_end) = arcs
+    for i in range(12):
+        j = i + 1
+        geometry.quad(outer_start[i], outer_end[i], outer_end[j], outer_start[j])
+        geometry.quad(inner_start[j], inner_end[j], inner_end[i], inner_start[i])
+        geometry.quad(outer_start[j], inner_start[j], inner_start[i], outer_start[i])
+        geometry.quad(outer_end[i], inner_end[i], inner_end[j], outer_end[j])
+    geometry.quad(outer_start[0], inner_start[0], inner_end[0], outer_end[0])
+    geometry.quad(outer_end[-1], inner_end[-1], inner_start[-1], outer_start[-1])
+
+
+def add_guardrail(doc, binary, name, base):
+    side_arm = [(-0.180, 0.219, 0.199), (-0.193, 0.262, 0.211), (-0.205, 0.315, 0.203),
+                (-0.211, 0.334, 0.191), (-0.215, 0.337, 0.168)]
+    x, y, z = side_arm[0]
+    left, right = (x, y, z), (x, y, -z)
+    rail = Geometry()
+    rail.tube(side_arm + [(a, b, -c) for a, b, c in reversed(side_arm)],
+              0.014, (1.0, 0.0, 0.0), sides=12)
+    for end in (left, right):
+        _, _, lateral = end
+        side = math.copysign(1, lateral)
+        dock_x = x + 0.024
+        # Only the axial pin enters the dock. The rail bends forward of it,
+        # leaving both the retained dock and the release button out of its sweep.
+        rail.beam((x - 0.008, y, lateral), (dock_x + 0.004, y, lateral), 0.012)
+        guard_cradle(base["guard_dock"], (dock_x, y, lateral))
+        base["guard_dock"].box((dock_x, y - 0.025, side * 0.192), (0.014, 0.018, 0.024))
+        base["guard_release"].beam((dock_x, y - 0.010, lateral + side * 0.017),
+                                   (dock_x, y - 0.010, lateral + side * 0.024), 0.008)
+
+    # Each endpoint is a separate pivot. At most one is opened at a time.
+    bar = mesh_node(doc, binary, name + "_FullGuard", {"guardrail": rail}, origin=left)
+    left_hinge = add_node(doc, name=name + "_LeftGuardPivot", translation=sub(left, right), children=[bar])
+    right_hinge = add_node(doc, name=name + "_RightGuardPivot", translation=right, children=[left_hinge])
+    removal = add_node(doc, name=name + "_GuardRemoval", children=[right_hinge])
+    for release_side, hinge, angle in (("Left", right_hinge, -110), ("Right", left_hinge, 110)):
+        clip(doc, binary, name + "_guard" + release_side,
+             [(hinge, "rotation", (0, 1), [rotation(AXIS_X, a) for a in (0, angle)])])
+    clip(doc, binary, name + "_guardRemoved", [
+        (removal, "translation", (0, 0.28, 0.93, 1),
+         [(0, 0, 0), (0, 0.055, 0), (0, 0.055, 0.505), (0, 0.055, 0.505)]),
+        (bar, "scale", (0, 0.94, 1), [(1, 1, 1), (0, 0, 0), (0, 0, 0)], "STEP"),
+    ])
+    return removal
 
 
 def add_legrest(support, pad, rear):
@@ -324,6 +365,7 @@ MATERIALS = {
     "upholstery": ([0.105, 0.145, 0.190, 1.0], 0.0, 0.82),
     "shell": ([0.075, 0.085, 0.095, 1.0], 0.12, 0.62),
     "guardrail": ([0.43, 0.49, 0.55, 1.0], 0.56, 0.42),
+    "guard_dock": ([0.098, 0.171, 0.205, 1.0], 0.15, 0.55),
     "guard_release": ([0.85, 0.45, 0.13, 1.0], 0.08, 0.48),
     "harness": ([0.72, 0.40, 0.13, 1.0], 0.0, 0.7),
     "mount_cheek": ([0.155, 0.258, 0.310, 1.0], 0.08, 0.62),
@@ -411,7 +453,7 @@ def shoulder_straps(angle, slide):
 
 
 def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
-    base = {key: Geometry() for key in ("upholstery", "shell", "guardrail", "harness", "guard_release")}
+    base = {key: Geometry() for key in ("upholstery", "shell", "guard_dock", "harness", "guard_release")}
     soft, shell, harness = (base[key] for key in ("upholstery", "shell", "harness"))
     soft.seat_pad((-0.023, 0.159, 0.0), (0.256, 0.038, 0.374), 0.041, 0.010, 0.013)
     shell.seat_pad((-0.012, 0.126, 0.0), (0.294, 0.034, 0.394), 0.047, 0.007, 0.026)
@@ -422,10 +464,7 @@ def make_seat(doc, binary, name, anchor, host_z, level, rear=False):
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
-    crossbar, release, hinge = add_guardrail(base["guardrail"], shell)
-    base["guard_release"] = release
-    bar = mesh_node(doc, binary, name + "_SwingBar", {"guardrail": crossbar}, origin=hinge, translation=hinge)
-    clip(doc, binary, name + "_guardrail", [(bar, "rotation", (0, 1), [rotation(AXIS_X, a) for a in (0, 110)])])
+    bar = add_guardrail(doc, binary, name, base)
 
     canopy = mesh_node(doc, binary, name + "_Canopy", canopy_geometry(1.0), morphs=[
         canopy_geometry(0), canopy_geometry(1 / 3, 0.115), canopy_geometry(2 / 3, 0.060)

@@ -22,7 +22,7 @@
     }
     body {
       margin: 0;
-      overflow: hidden;
+      min-width: 0;
       background-color: var(--bg-studio);
       color: var(--ink-primary);
       font-family: 'Plus Jakarta Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -64,6 +64,120 @@
       box-shadow: 0 8px 20px -4px rgba(24, 24, 27, 0.22);
     }
 
+    #studio-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 16px;
+      height: 100vh;
+      height: 100dvh;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    #studio-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 24px;
+      min-width: 0;
+      padding: 14px 18px;
+      border-radius: 22px;
+    }
+    .studio-brand {
+      display: flex;
+      flex: none;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 7px;
+    }
+    .studio-specs {
+      display: flex;
+      flex-wrap: wrap;
+      column-gap: 16px;
+      row-gap: 4px;
+    }
+    .studio-specs > div { display: flex; align-items: baseline; gap: 5px; }
+    .studio-specs dt { color: var(--ink-secondary); font-size: 11px; }
+    .studio-specs dd { font-size: 12px; font-weight: 600; }
+    #studio-workspace {
+      display: grid;
+      grid-template-columns: clamp(260px, 25vw, 330px) minmax(0, 1fr);
+      grid-template-areas: "configuration preview";
+      gap: 16px;
+      min-height: 0;
+    }
+    #studio-workspace.has-operations {
+      grid-template-columns: clamp(260px, 24vw, 330px) minmax(0, 1fr) clamp(280px, 26vw, 360px);
+      grid-template-areas: "configuration preview operations";
+    }
+    #configuration-panel, #operation-panel {
+      min-width: 0;
+      min-height: 0;
+      padding: 18px;
+      border-radius: 22px;
+      overflow: auto;
+    }
+    #configuration-panel { grid-area: configuration; }
+    #operation-panel { grid-area: operations; }
+    #studio-preview {
+      position: relative;
+      grid-area: preview;
+      min-width: 0;
+      min-height: 0;
+      border-radius: 22px;
+      overflow: hidden;
+      background: var(--bg-studio);
+    }
+    #canvas-container { position: absolute; inset: 0; touch-action: none; }
+    #canvas-container canvas { display: block; width: 100%; height: 100%; }
+    #camera-controls {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: calc(100% - 12px);
+      white-space: nowrap;
+    }
+    #model-status {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: calc(100% - 24px);
+      padding: 6px 12px;
+      text-align: center;
+    }
+    [hidden] { display: none !important; }
+
+    @media (max-width: 1050px) {
+      #studio-shell { height: auto; min-height: 100dvh; }
+      #studio-workspace,
+      #studio-workspace.has-operations {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas: "preview preview" "configuration operations";
+        align-items: start;
+      }
+      #studio-workspace:not(.has-operations) { grid-template-areas: "preview preview" "configuration configuration"; }
+      #studio-preview {
+        z-index: 1;
+        position: sticky;
+        top: 0;
+        height: clamp(180px, 48dvh, 500px);
+      }
+    }
+
+    @media (max-width: 640px) {
+      #studio-shell, #studio-workspace, #studio-workspace.has-operations { gap: 10px; }
+      #studio-shell { padding: 10px; }
+      #studio-header { flex-direction: column; gap: 8px; padding: 12px; }
+      .studio-brand { flex-direction: row; justify-content: space-between; align-items: center; width: 100%; }
+      .studio-specs { column-gap: 10px; }
+      #studio-workspace, #studio-workspace:not(.has-operations), #studio-workspace.has-operations {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "preview" "configuration" "operations";
+      }
+      #studio-preview { height: clamp(170px, 44dvh, 360px); }
+      #configuration-panel, #operation-panel { padding: 14px; }
+    }
+
     #d02-states button:disabled { opacity: 0.45; cursor: not-allowed; }
 
     input[type=range].studio-slider {
@@ -100,37 +214,36 @@
 </head>
 <body class="select-none">
 
-<!-- 顶部品牌与仓库模型同步状态栏 -->
-<header class="fixed top-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3.5 studio-panel px-5 py-2.5 rounded-full">
-  <span class="text-xs font-bold tracking-[0.22em] text-zinc-900 uppercase">AERO·MOD</span>
-  <span class="w-px h-3 bg-zinc-300"></span>
-  <div class="flex items-center gap-2">
-    <span id="cad-status-dot" class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-    <span id="cad-status-text" class="text-[11px] font-medium text-zinc-600">正在同步 4 大模型文件夹...</span>
+<div id="studio-shell">
+<header id="studio-header" class="studio-panel">
+  <div class="studio-brand">
+    <span class="text-xs font-bold tracking-[0.22em] text-zinc-900">AERO·MOD</span>
+    <button type="button" onclick="forceReloadModels()" class="text-[11px] px-2.5 py-1 rounded-full bg-zinc-900/5 hover:bg-zinc-900/10 text-zinc-700">
+      ↻ 刷新模型
+    </button>
   </div>
-  <button onclick="forceReloadModels()" title="强制拉取 GitHub 最新模型" class="text-[11px] font-mono-num px-2.5 py-0.5 rounded-full bg-zinc-900/5 hover:bg-zinc-900/10 text-zinc-700 transition cursor-pointer">
-    ↻ 刷新模型
-  </button>
+  <div class="min-w-0 space-y-1.5">
+    <div class="flex flex-wrap items-center gap-2">
+      <h1 id="spec-title" class="text-base font-semibold text-zinc-900">单儿童坐席</h1>
+      <span id="spec-code" class="text-[11px] font-mono-num font-semibold bg-zinc-900 text-white px-2 py-0.5 rounded-full">S05</span>
+    </div>
+    <dl class="studio-specs">
+      <div id="frame-width-info"><dt>车架宽度</dt><dd id="spec-frame-width" class="font-mono-num"></dd></div>
+      <div id="total-width-info"><dt>整车宽度</dt><dd id="spec-total-width" class="font-mono-num"></dd></div>
+      <div><dt>轮组</dt><dd id="spec-wheelset"></dd></div>
+      <div id="posture-info"><dt id="spec-posture-label">接口</dt><dd id="spec-posture"></dd></div>
+      <div id="child-capacity-info"><dt>儿童座位</dt><dd id="spec-children"></dd></div>
+    </dl>
+    <p id="spec-desc" class="text-[11px] leading-relaxed text-zinc-600" hidden></p>
+  </div>
 </header>
 
-<!-- 3D 渲染画布容器 -->
-<div id="canvas-container" class="w-screen h-screen cursor-grab active:cursor-grabbing"></div>
-
-<!-- 左侧高定配置面板 -->
-<aside class="fixed top-5 left-5 bottom-5 w-[380px] studio-panel rounded-[28px] p-6 flex flex-col gap-5 overflow-y-auto z-10">
-  <div class="pb-3 border-b border-zinc-200/80">
-    <div class="flex items-center justify-between">
-      <span class="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-700/90">Pure CAD Pipeline</span>
-      <span class="text-[11px] font-mono-num text-zinc-400">4 Folders Architecture</span>
-    </div>
-    <h1 class="text-xl font-semibold tracking-tight text-zinc-900 mt-1">模块化推车定制系统</h1>
-  </div>
-
+<div id="studio-workspace">
+<aside id="configuration-panel" class="studio-panel flex flex-col gap-5" aria-label="配置选项">
   <!-- 01. 座舱配置模式 -->
   <section class="space-y-2.5">
     <div class="flex items-center justify-between">
       <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">01 · Configuration Mode</label>
-      <span id="asset-source-badge" class="text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">模型匹配状态</span>
     </div>
 
     <!-- 胶囊分段选择器 -->
@@ -201,75 +314,39 @@
     </div>
   </section>
 
-  <!-- 04. 整车 6 种标准姿态控制 -->
-  <section class="space-y-2.5 pt-3 border-t border-zinc-200/70">
-    <div class="flex justify-between items-center">
-      <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">04 · 6 Posture States</label>
-      <span id="posture-label" class="text-[11px] font-mono-num font-semibold text-zinc-800">安装完成 (State 1)</span>
-    </div>
+</aside>
+
+<main id="studio-preview" aria-label="推车三维预览">
+  <div id="canvas-container" class="cursor-grab active:cursor-grabbing"></div>
+  <p id="model-status" class="studio-panel rounded-xl text-xs text-zinc-700" role="status" hidden></p>
+  <nav id="camera-controls" class="flex items-center gap-1 studio-panel p-1.5 rounded-full" aria-label="模型视角">
+    <button type="button" onclick="setCameraView('iso')" id="cam-iso" class="px-2.5 py-1.5 text-xs font-medium rounded-full transition seg-active">3/4 轴测</button>
+    <button type="button" onclick="setCameraView('side')" id="cam-side" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">正侧视</button>
+    <button type="button" onclick="setCameraView('front')" id="cam-front" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">正前视</button>
+    <button type="button" onclick="setCameraView('top')" id="cam-top" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">俯视图</button>
+  </nav>
+</main>
+
+<aside id="operation-panel" class="studio-panel space-y-3" aria-labelledby="states-heading" hidden>
+  <h2 id="states-heading" class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">04 · States</h2>
+  <section id="chassis-states" class="space-y-3" aria-labelledby="chassis-states-heading" hidden>
+    <h3 id="chassis-states-heading" class="text-xs font-semibold text-zinc-800">车架姿态</h3>
     <div class="grid grid-cols-3 gap-1.5">
-      <button id="posture-1" onclick="setPosture(1)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium card-active">安装完成</button>
-      <button id="posture-2" onclick="setPosture(2)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠中</button>
-      <button id="posture-3" onclick="setPosture(3)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠后站立</button>
-      <button id="posture-4" onclick="setPosture(4)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸车轮</button>
-      <button id="posture-5" onclick="setPosture(5)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸横杆</button>
-      <button id="posture-6" onclick="setPosture(6)" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">横杆&车轮均拆</button>
+      <button id="posture-1" onclick="setPosture(1)" aria-pressed="true" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium card-active">安装完成</button>
+      <button id="posture-2" onclick="setPosture(2)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠中</button>
+      <button id="posture-3" onclick="setPosture(3)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠后站立</button>
+      <button id="posture-4" onclick="setPosture(4)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸车轮</button>
+      <button id="posture-5" onclick="setPosture(5)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸横杆</button>
+      <button id="posture-6" onclick="setPosture(6)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">横杆&车轮均拆</button>
     </div>
   </section>
 
-  <section id="d02-states" class="hidden space-y-3 pt-3 border-t border-zinc-200/70" aria-labelledby="d02-states-heading">
-    <h2 id="d02-states-heading" class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">04 · States</h2>
+  <section id="d02-states" aria-label="座椅状态" hidden>
     <div id="d02-seat-controls" class="space-y-3"></div>
-    <p id="d02-states-status" class="hidden text-[11px] text-zinc-500" role="status"></p>
+    <p id="d02-states-status" class="mt-2 text-[11px] text-zinc-500" role="status" hidden></p>
   </section>
-
 </aside>
-
-<!-- 右上角高定规格参数卡片 -->
-<aside class="fixed top-5 right-5 w-[340px] studio-panel rounded-[28px] p-6 z-10 space-y-4">
-  <div class="flex items-center justify-between border-b border-zinc-200/80 pb-3">
-    <div>
-      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400">Specification</div>
-      <div id="spec-title" class="text-base font-semibold text-zinc-900 mt-0.5">单儿童坐席</div>
-    </div>
-    <span id="spec-code" class="text-xs font-mono-num font-semibold bg-zinc-900 text-white px-3 py-1 rounded-full">S05</span>
-  </div>
-
-  <div class="grid grid-cols-2 gap-2.5">
-    <div class="bg-white/90 p-3 rounded-2xl border border-zinc-200/70">
-      <div class="text-[10px] uppercase tracking-wider text-zinc-400">Frame Width</div>
-      <div id="spec-frame-width" class="text-sm font-semibold font-mono-num text-zinc-900 mt-1">550 mm · 中档</div>
-    </div>
-    <div class="bg-white/90 p-3 rounded-2xl border border-zinc-200/70">
-      <div class="text-[10px] uppercase tracking-wider text-zinc-400">Overall Width</div>
-      <div id="spec-total-width" class="text-sm font-semibold font-mono-num text-amber-800 mt-1">664 mm</div>
-    </div>
-    <div class="bg-white/90 p-3 rounded-2xl border border-zinc-200/70">
-      <div class="text-[10px] uppercase tracking-wider text-zinc-400">Posture</div>
-      <div id="spec-posture" class="text-xs font-semibold text-zinc-800 mt-1">安装完成</div>
-    </div>
-    <div class="bg-white/90 p-3 rounded-2xl border border-zinc-200/70">
-      <div class="text-[10px] uppercase tracking-wider text-zinc-400">Child Capacity</div>
-      <div id="spec-children" class="text-sm font-semibold font-mono-num text-zinc-900 mt-1">1 Seat</div>
-    </div>
-  </div>
-
-  <div class="bg-zinc-900/[0.03] p-3.5 rounded-2xl border border-zinc-900/[0.06] space-y-2">
-    <div class="text-[11px] text-zinc-600 leading-relaxed" id="spec-desc"></div>
-    <div id="spec-cad-path" class="text-[10px] font-mono-num text-zinc-400 pt-1 border-t border-zinc-200/60">
-      资产路径: models/single_cabin/S05.(glb|step)
-    </div>
-  </div>
-</aside>
-
-<!-- 底部中央相机视角切换栏 -->
-<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 studio-panel p-1.5 rounded-full">
-  <button onclick="setCameraView('iso')" id="cam-iso" class="px-4 py-1.5 text-xs font-medium rounded-full transition seg-active">3/4 轴测</button>
-  <button onclick="setCameraView('side')" id="cam-side" class="px-4 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">正侧视</button>
-  <button onclick="setCameraView('front')" id="cam-front" class="px-4 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">正前视</button>
-  <button onclick="setCameraView('top')" id="cam-top" class="px-4 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">俯视图</button>
-  <span class="w-px h-3.5 bg-zinc-300 mx-1"></span>
-  <span class="text-[11px] text-zinc-400 pr-3 hidden sm:inline">纯 CAD 模式 · 无内置几何体</span>
+</div>
 </div>
 
 <script>
@@ -385,7 +462,7 @@ const state = {
   cacheBust: Date.now()
 };
 
-const cadAssetCache = new Map();
+let cadAssetCache = new Map();
 let occtInstancePromise = null;
 const gltfLoader = new THREE.GLTFLoader();
 
@@ -400,23 +477,28 @@ function getOcctEngine() {
 
 // 纯 CAD 资产加载器：只读取真实文件，绝不生成任何内置几何体
 async function loadCadAsset(logicalKey, relativePathsWithoutExt) {
+  const cache = cadAssetCache;
+  const cacheBust = state.cacheBust;
   const pathList = Array.isArray(relativePathsWithoutExt) ? relativePathsWithoutExt : [relativePathsWithoutExt];
 
-  if (cadAssetCache.has(logicalKey)) {
-    const cached = cadAssetCache.get(logicalKey);
+  if (cache.has(logicalKey)) {
+    const cached = cache.get(logicalKey);
     if (cached.status === 'loaded') return cached.group.clone();
-    if (cached.status === 'missing') return null;
+    if (cached.status === 'missing' || cached.status === 'error') return null;
   }
 
-  cadAssetCache.set(logicalKey, { status: 'loading', group: null });
-  updateHeaderStatus();
+  cache.set(logicalKey, { status: 'loading', group: null });
+  let failed = false;
 
   for (const relPath of pathList) {
     for (const ext of MODEL_MANIFEST.extensions) {
-      const url = `${MODEL_MANIFEST.baseUrl}/${relPath}${ext}?v=${state.cacheBust}`;
+      const url = `${MODEL_MANIFEST.baseUrl}/${relPath}${ext}?v=${cacheBust}`;
       try {
         const headRes = await fetch(url, { method: 'HEAD' });
-        if (!headRes.ok) continue;
+        if (!headRes.ok) {
+          if (headRes.status !== 404 && headRes.status !== 410) failed = true;
+          continue;
+        }
 
         let loadedGroup = null;
         let animations = [];
@@ -428,6 +510,10 @@ async function loadCadAsset(logicalKey, relativePathsWithoutExt) {
           animations = gltf.animations || [];
         } else if (ext === '.step' || ext === '.stp') {
           const res = await fetch(url);
+          if (!res.ok) {
+            failed = true;
+            continue;
+          }
           const buffer = new Uint8Array(await res.arrayBuffer());
           const occt = await getOcctEngine();
           const result = occt.ReadStepFile(buffer, null);
@@ -436,24 +522,21 @@ async function loadCadAsset(logicalKey, relativePathsWithoutExt) {
 
         if (loadedGroup) {
           normalizeCadGroup(loadedGroup, ext);
-          cadAssetCache.set(logicalKey, {
+          cache.set(logicalKey, {
             status: 'loaded',
             group: loadedGroup,
-            animations,
-            ext,
-            foundPath: `models/${relPath}${ext}`
+            animations
           });
-          updateHeaderStatus();
           return loadedGroup.clone();
         }
+        failed = true;
       } catch (e) {
-        // 继续尝试下一个候选
+        failed = true;
       }
     }
   }
 
-  cadAssetCache.set(logicalKey, { status: 'missing', group: null });
-  updateHeaderStatus();
+  cache.set(logicalKey, { status: failed ? 'error' : 'missing', group: null });
   return null;
 }
 
@@ -519,32 +602,15 @@ function normalizeCadGroup(group, ext) {
   });
 }
 
-function updateHeaderStatus() {
-  const dot = document.getElementById('cad-status-dot');
-  const text = document.getElementById('cad-status-text');
-  let loadedCount = 0;
-  let loadingCount = 0;
-
-  cadAssetCache.forEach(val => {
-    if (val.status === 'loaded') loadedCount++;
-    if (val.status === 'loading') loadingCount++;
-  });
-
-  if (loadingCount > 0) {
-    dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-ping';
-    text.textContent = '正在加载 GitHub 模型文件...';
-  } else if (loadedCount > 0) {
-    dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
-    text.textContent = `已加载 ${loadedCount} 个模型文件`;
-  } else {
-    dot.className = 'w-2 h-2 rounded-full bg-zinc-400';
-    text.textContent = '等待在对应文件夹放入 GLB/STEP 模型';
-  }
+function setModelStatus(message) {
+  const status = document.getElementById('model-status');
+  status.textContent = message;
+  status.hidden = !message;
 }
 
 function forceReloadModels() {
-  cadAssetCache.clear();
-  state.cacheBust = Date.now();
+  cadAssetCache = new Map();
+  state.cacheBust = Math.max(state.cacheBust + 1, Date.now());
   updateScene();
 }
 
@@ -573,12 +639,12 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xF5F4F0);
 scene.fog = new THREE.Fog(0xF5F4F0, 3200, 7500);
 
-let sceneFocus = new THREE.Vector3(0, 420, 0);
-const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 10, 15000);
+const sceneFocus = new THREE.Vector3(0, 420, 0);
+let sceneBounds = null;
+const camera = new THREE.PerspectiveCamera(38, 1, 10, 15000);
 camera.position.set(-1550, 980, 1650);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -635,7 +701,12 @@ scene.add(strollerRoot);
 // D02: sample the model's independent animation clips at discrete positions.
 // ============================================================================
 const D02_COMPONENTS = [
-  { key: 'guardrail', label: '护栏', positions: ['闭合', '打开'], initial: 0 },
+  {
+    key: 'guardrail', label: '护栏', initial: 0,
+    positions: ['闭合', '松开左侧', '松开右侧', '拆下'],
+    variants: [null, 'guardLeft', 'guardRight', 'guardRemoved'],
+    hints: ['闭合', '松开左侧，绕右侧转开', '松开右侧，绕左侧转开', '完全拆下']
+  },
   { key: 'canopy', label: '顶篷', positions: ['收合', '1 档', '2 档', '3 档'], initial: 3 },
   { key: 'legrest', label: '腿托', positions: ['1 · 低', '2 · 中', '3 · 高'], initial: 0 },
   { key: 'backrest', label: '靠背', positions: ['1 · 直立', '2 · 中躺', '3 · 后仰'], initial: 0 }
@@ -663,13 +734,20 @@ function buildD02StateControls() {
       label.textContent = component.label;
       row.appendChild(label);
 
-      const control = { buttons: [], index: component.initial, action: null, transition: null };
+      const control = {
+        buttons: [], index: component.initial, action: null, transition: null,
+        variants: component.variants || null, variantActions: [], activeIndex: 0
+      };
       component.positions.forEach((position, index) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.id = `d02-${seat.toLowerCase()}-${component.key}-${index}`;
         button.className = 'card-btn min-h-[28px] flex-1 px-0.5 rounded-lg text-[11px] font-medium';
         button.textContent = position;
+        if (component.hints) {
+          button.title = component.hints[index];
+          button.setAttribute('aria-label', component.hints[index]);
+        }
         button.addEventListener('click', () => setD02Position(control, index));
         control.buttons.push(button);
         row.appendChild(button);
@@ -682,17 +760,25 @@ function buildD02StateControls() {
 }
 
 function updateD02StateControls(loading = false) {
-  const panel = document.getElementById('d02-states');
-  const visible = state.cabinMode === 'double' && state.selectedId === 'D02';
-  panel.classList.toggle('hidden', !visible);
-  if (!visible) return;
+  const showChassis = state.cabinMode === 'none';
+  const showD02 = state.cabinMode === 'double' && state.selectedId === 'D02';
+  document.getElementById('chassis-states').hidden = !showChassis;
+  document.getElementById('d02-states').hidden = !showD02;
+  document.getElementById('operation-panel').hidden = !(showChassis || showD02);
+  document.getElementById('studio-workspace').classList.toggle('has-operations', showChassis || showD02);
+  if (!showD02) return;
 
-  let availableRows = 0;
+  let availablePositions = 0;
+  let positionCount = 0;
   for (const control of d02ControlRows.values()) {
-    if (control.action) availableRows++;
+    const hasAction = control.variants ? control.variantActions.some(Boolean) : Boolean(control.action);
+    const selectedIndex = control.variants && !control.variantActions[control.index] ? 0 : control.index;
     control.buttons.forEach((button, index) => {
-      const selected = Boolean(control.action) && index === control.index;
-      button.disabled = loading || !control.action;
+      const available = hasAction && (!control.variants || index === 0 || Boolean(control.variantActions[index]));
+      const selected = available && index === selectedIndex;
+      positionCount++;
+      if (available) availablePositions++;
+      button.disabled = loading || !available;
       button.classList.toggle('card-active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -700,14 +786,24 @@ function updateD02StateControls(loading = false) {
 
   const status = document.getElementById('d02-states-status');
   if (loading) status.textContent = '正在载入可调状态…';
-  else if (!availableRows) status.textContent = '此模型暂未提供可调状态。';
-  else if (availableRows < d02ControlRows.size) status.textContent = '此模型的部分动作暂不可用。';
+  else if (!availablePositions) status.textContent = '此模型暂未提供可调状态。';
+  else if (availablePositions < positionCount) status.textContent = '此模型的部分动作暂不可用。';
   else status.textContent = '';
-  status.classList.toggle('hidden', !status.textContent);
+  status.hidden = !status.textContent;
 }
 
 function d02PositionTime(control) {
   return control.action.getClip().duration * control.index / (control.buttons.length - 1);
+}
+
+function createD02Action(clip) {
+  return d02Mixer && clip?.duration > 0 ? d02Mixer.clipAction(clip) : null;
+}
+
+function playD02Pose(action, time) {
+  action.paused = true;
+  action.time = time;
+  action.play();
 }
 
 function bindD02PoseModel(model, animations) {
@@ -718,28 +814,59 @@ function bindD02PoseModel(model, animations) {
   d02Mixer = model && animations.length ? new THREE.AnimationMixer(model) : null;
   const clips = new Map(animations.map(clip => [clip.name, clip]));
   for (const [name, control] of d02ControlRows) {
-    const clip = clips.get(name);
     control.action = null;
     control.transition = null;
-    if (!d02Mixer || !clip || clip.duration <= 0) continue;
-    const action = d02Mixer.clipAction(clip);
-    action.paused = true;
-    action.play();
-    control.action = action;
-    action.time = d02PositionTime(control);
+    control.activeIndex = 0;
+    if (control.variants) {
+      const prefix = name.slice(0, -'guardrail'.length);
+      control.variantActions = control.variants.map(variant => variant ? createD02Action(clips.get(prefix + variant)) : null);
+      control.action = control.variantActions[control.index] || null;
+      if (control.action) {
+        control.activeIndex = control.index;
+        playD02Pose(control.action, control.action.getClip().duration);
+      }
+    } else {
+      control.action = createD02Action(clips.get(name));
+      if (control.action) playD02Pose(control.action, d02PositionTime(control));
+    }
   }
   if (d02Mixer) d02Mixer.update(0);
   updateD02StateControls();
 }
 
+function startD02Transition(control, to, now) {
+  const from = control.action.time;
+  control.transition = from === to ? null : { start: now, from, to };
+}
+
+function queueD02Guard(control, now) {
+  // Each guard clip uses the same nodes. Return to the shared closed pose
+  // before switching clips so their transforms never blend on the guard.
+  if (control.action && control.activeIndex !== control.index) {
+    if (control.action.time > 0) {
+      startD02Transition(control, 0, now);
+      return;
+    }
+    control.action.stop();
+    control.action = null;
+    control.activeIndex = 0;
+  }
+
+  if (!control.index) return;
+  if (!control.action) {
+    control.action = control.variantActions[control.index];
+    control.activeIndex = control.index;
+    playD02Pose(control.action, 0);
+  }
+  startD02Transition(control, control.action.getClip().duration, now);
+}
+
 function setD02Position(control, index) {
   if (control.buttons[index].disabled || index === control.index) return;
   control.index = index;
-  control.transition = {
-    start: performance.now(),
-    from: control.action.time,
-    to: d02PositionTime(control)
-  };
+  const now = performance.now();
+  if (control.variants) queueD02Guard(control, now);
+  else startD02Transition(control, d02PositionTime(control), now);
   updateD02StateControls();
 }
 
@@ -752,7 +879,10 @@ function animateD02Poses(now) {
     const progress = Math.max(0, Math.min(1, (now - transition.start) / 300));
     const eased = progress * progress * (3 - 2 * progress);
     control.action.time = transition.from + (transition.to - transition.from) * eased;
-    if (progress === 1) control.transition = null;
+    if (progress === 1) {
+      control.transition = null;
+      if (control.variants && transition.to === 0) queueD02Guard(control, now);
+    }
     updated = true;
   }
   if (updated) d02Mixer.update(0);
@@ -766,6 +896,14 @@ let renderToken = 0;
 async function updateScene() {
   const currentToken = ++renderToken;
   updateD02StateControls(true);
+  updateProductHeader();
+  setModelStatus('正在加载模型…');
+
+  const assetKeys = [];
+  function loadSelected(key, paths) {
+    assetKeys.push(key);
+    return loadCadAsset(key, paths);
+  }
 
   const nextGroup = new THREE.Group();
   let d02Model = null;
@@ -775,7 +913,7 @@ async function updateScene() {
   if (state.cabinMode === 'none') {
     // 纯车架展示：根据当前宽度与 6 种标准姿态加载模型
     const paths = MODEL_MANIFEST.noCabin.getPaths(state.frameWidth, state.postureState, state.wheelSize);
-    const frameModel = await loadCadAsset(getNoCabinCacheKey(), paths);
+    const frameModel = await loadSelected(getNoCabinCacheKey(), paths);
     if (currentToken !== renderToken) return;
 
     if (frameModel) {
@@ -789,7 +927,7 @@ async function updateScene() {
     if (state.cabinMode === 'single') {
       const spec = SINGLE_CABINS.find(c => c.id === state.selectedId);
       if (spec) {
-        const cabinModel = await loadCadAsset(
+        const cabinModel = await loadSelected(
           getCabinCacheKey('single', spec.id),
           getCabinPaths('single', spec.id)
         );
@@ -800,7 +938,7 @@ async function updateScene() {
       const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
       if (dSpec) {
         const cacheKey = getCabinCacheKey('double', dSpec.id);
-        const doubleModel = await loadCadAsset(
+        const doubleModel = await loadSelected(
           cacheKey,
           getCabinPaths('double', dSpec.id)
         );
@@ -818,7 +956,7 @@ async function updateScene() {
 
     if (state.cabinMode === 'other') {
       const wheelPaths = MODEL_MANIFEST.other.wheels[state.wheelSize];
-      const wheelModel = await loadCadAsset(`other_wheel_${state.wheelSize}`, wheelPaths);
+      const wheelModel = await loadSelected(`other_wheel_${state.wheelSize}`, wheelPaths);
       if (currentToken !== renderToken) return;
       if (wheelModel) {
         // 在四个角落放置车轮
@@ -832,7 +970,7 @@ async function updateScene() {
         });
       }
 
-      const barModel = await loadCadAsset('other_crossbar', MODEL_MANIFEST.other.crossbar);
+      const barModel = await loadSelected('other_crossbar', MODEL_MANIFEST.other.crossbar);
       if (currentToken !== renderToken) return;
       if (barModel) {
         nextGroup.add(barModel);
@@ -840,9 +978,17 @@ async function updateScene() {
     }
   }
 
+  updateProductHeader(d02Model);
   bindD02PoseModel(d02Model, d02Animations);
   replaceStrollerRoot(nextGroup);
-  updateInfoPanel();
+  const hasModel = nextGroup.children.length > 0;
+  const missingAsset = assetKeys.some(key => cadAssetCache.get(key)?.status !== 'loaded');
+  const loadError = assetKeys.some(key => cadAssetCache.get(key)?.status === 'error');
+  if (!hasModel) {
+    setModelStatus(loadError ? '模型加载失败，请刷新后重试。' : '当前配置暂无可查看的模型。');
+  } else {
+    setModelStatus(missingAsset ? '部分零部件暂不可查看。' : '');
+  }
 }
 
 function replaceStrollerRoot(newGroup) {
@@ -851,20 +997,24 @@ function replaceStrollerRoot(newGroup) {
   }
   strollerRoot.add(newGroup);
 
-  const bounds = new THREE.Box3().setFromObject(strollerRoot);
-  if (!bounds.isEmpty()) {
-    sceneFocus.copy(bounds.getCenter(new THREE.Vector3()));
-    const direction = camera.position.clone().sub(controls.target);
-    if (direction.lengthSq() < 1) direction.set(-1550, 560, 1650);
-    direction.normalize();
-    const height = bounds.getSize(new THREE.Vector3()).y;
-    const fitDistance = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.6;
-    const distance = Math.max(2300, fitDistance);
-    controls.target.copy(sceneFocus);
-    camera.position.copy(sceneFocus).addScaledVector(direction, distance);
-    controls.maxDistance = Math.max(4200, distance * 1.6);
-    controls.update();
-  }
+  sceneBounds = new THREE.Box3().setFromObject(strollerRoot);
+  fitPreview();
+}
+
+function fitPreview() {
+  if (!sceneBounds || sceneBounds.isEmpty()) return;
+  sceneFocus.copy(sceneBounds.getCenter(new THREE.Vector3()));
+  const direction = camera.position.clone().sub(controls.target);
+  if (direction.lengthSq() < 1) direction.set(-1550, 560, 1650);
+  direction.normalize();
+  const size = sceneBounds.getSize(new THREE.Vector3());
+  const halfFov = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const width = Math.hypot(size.x, size.z);
+  const distance = Math.max(1800, Math.max(size.y, width / camera.aspect) * 0.68 / halfFov);
+  controls.target.copy(sceneFocus);
+  camera.position.copy(sceneFocus).addScaledVector(direction, distance);
+  controls.maxDistance = Math.max(4200, distance * 1.6);
+  controls.update();
 }
 
 // ============================================================================
@@ -902,11 +1052,6 @@ function setCabinMode(mode) {
     const btn = document.getElementById(`mode-${m}`);
     if (btn) btn.classList.toggle('seg-active', m === mode);
   });
-
-  const postureSec = document.getElementById('posture-label').closest('section');
-  if (postureSec) {
-    postureSec.style.display = (mode === 'none') ? 'block' : 'none';
-  }
 
   populateCabinSelect();
   if (mode === 'single' || mode === 'double') {
@@ -982,114 +1127,71 @@ function setWheelSize(size, skipSceneUpdate = false) {
   if (!skipSceneUpdate) updateScene();
 }
 
+const CHASSIS_POSTURES = ['安装完成', '折叠中', '折叠后站立', '拆卸车轮', '拆卸横杆', '横杆与车轮均拆'];
+
 function setPosture(stateNum) {
   state.postureState = stateNum;
-  const names = { 1: '安装完成', 2: '折叠中', 3: '折叠后站立', 4: '拆卸车轮', 5: '拆卸横杆', 6: '横杆车轮均拆' };
-  document.getElementById('posture-label').textContent = `${names[stateNum]} (State ${stateNum})`;
-
-  [1, 2, 3, 4, 5, 6].forEach(n => {
-    const btn = document.getElementById(`posture-${n}`);
-    if (btn) btn.classList.toggle('card-active', n === stateNum);
-  });
-
+  for (let posture = 1; posture <= CHASSIS_POSTURES.length; posture++) {
+    const button = document.getElementById(`posture-${posture}`);
+    button.classList.toggle('card-active', posture === stateNum);
+    button.setAttribute('aria-pressed', String(posture === stateNum));
+  }
   updateScene();
 }
 
-function updateInfoPanel() {
-  const wheelSpec = WHEEL_SPECS[state.wheelSize];
-  const widthName = state.frameWidth === 380 ? '窄档' : (state.frameWidth === 550 ? '中档' : '宽档');
-  document.getElementById('spec-frame-width').textContent = `${state.frameWidth} mm · ${widthName}`;
+function updateProductHeader(d02Model = null) {
+  const { cabinMode, frameWidth, wheelSize, postureState, selectedId } = state;
+  const isChassis = cabinMode === 'none';
+  const isParts = cabinMode === 'other';
+  const isDouble = cabinMode === 'double';
+  const spec = (isDouble ? DOUBLE_CABINS : SINGLE_CABINS).find(item => item.id === selectedId);
+  const wheelSpec = WHEEL_SPECS[wheelSize];
+  const widthName = frameWidth === 380 ? '窄档' : (frameWidth === 550 ? '中档' : '宽档');
 
-  const totalW = state.frameWidth + (wheelSpec.rearWidth + 12) * 2;
-  document.getElementById('spec-total-width').textContent = `${totalW} mm (${wheelSpec.name})`;
+  let title = spec?.name;
+  let code = spec?.id;
+  let posture = spec?.portLabel;
+  let children = spec?.children || 0;
+  let description = spec?.desc || '';
+  let totalWidth = `${frameWidth + (wheelSpec.rearWidth + 12) * 2} mm`;
 
-  const pathEl = document.getElementById('spec-cad-path');
-  const badgeEl = document.getElementById('asset-source-badge');
-
-  if (state.cabinMode === 'none') {
-    const paths = MODEL_MANIFEST.noCabin.getPaths(state.frameWidth, state.postureState, state.wheelSize);
-    const cached = cadAssetCache.get(getNoCabinCacheKey());
-    const isLoaded = cached && cached.status === 'loaded';
-
-    document.getElementById('spec-code').textContent = `STATE ${state.postureState}`;
-    document.getElementById('spec-posture').textContent = ['安装完成','折叠中','折叠后站立','拆卸车轮','拆卸横杆','横杆车轮均拆'][state.postureState-1];
-    document.getElementById('spec-children').textContent = '0 Seat';
-    document.getElementById('spec-title').textContent = `纯车架 · ${widthName}姿态展示`;
-    document.getElementById('spec-desc').textContent = isLoaded
-      ? `当前正在渲染真实 CAD 模型: ${cached.foundPath}`
-      : `未检测到 /models/no_cabin/ 下对应文件。请上传匹配宽度、姿态和车轮的模型（wheel_${state.wheelSize}）`;
-    pathEl.textContent = `查找路径: ${paths.map(path => `models/${path}`).join('、')}`;
-    badgeEl.textContent = isLoaded ? `✓ 真实CAD` : '等待上传';
-    badgeEl.className = isLoaded
-      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
-      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
-    return;
-  }
-
-  if (state.cabinMode === 'other') {
-    const otherAssets = [
-      cadAssetCache.get(`other_wheel_${state.wheelSize}`),
-      cadAssetCache.get('other_crossbar')
-    ].filter(asset => asset && asset.status === 'loaded');
-
-    document.getElementById('spec-code').textContent = 'OTHER';
-    document.getElementById('spec-posture').textContent = '独立零部件';
-    document.getElementById('spec-children').textContent = '0 Seat';
-    document.getElementById('spec-title').textContent = '其他零部件';
-    document.getElementById('spec-desc').textContent = '独立展示车轮与横杆 CAD 模型。';
-    pathEl.textContent = `查找路径: models/other/wheel_${state.wheelSize}、models/other/crossbar`;
-    badgeEl.textContent = otherAssets.length ? `✓ 已加载 ${otherAssets.length} 个零部件` : '等待上传';
-    badgeEl.className = otherAssets.length
-      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
-      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
-    return;
-  }
-
-  if (state.cabinMode === 'single') {
-    const s = SINGLE_CABINS.find(x => x.id === state.selectedId);
-    const cached = cadAssetCache.get(getCabinCacheKey('single', s.id));
-    const isLoaded = cached && cached.status === 'loaded';
-
-    document.getElementById('spec-code').textContent = s.id;
-    document.getElementById('spec-posture').textContent = s.portLabel;
-    document.getElementById('spec-children').textContent = `${s.children} ${s.children > 1 ? 'Seats' : 'Seat'}`;
-    document.getElementById('spec-title').textContent = s.name;
-    document.getElementById('spec-desc').textContent = s.desc;
-    pathEl.textContent = isLoaded
-      ? `已加载: ${cached.foundPath}`
-      : `查找路径: ${getCabinPaths('single', s.id).map(path => `models/${path}`).join('、')}`;
-    badgeEl.textContent = isLoaded ? `✓ 单舱CAD` : '等待上传';
-    badgeEl.className = isLoaded
-      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
-      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
-  } else {
-    const d = DOUBLE_CABINS.find(x => x.id === state.selectedId);
-    const cached = cadAssetCache.get(getCabinCacheKey('double', d.id));
-    const isLoaded = cached && cached.status === 'loaded';
-    const isD02 = d.id === 'D02';
-
-    document.getElementById('spec-code').textContent = d.id;
-    document.getElementById('spec-posture').textContent = `${d.portLabel} 接口`;
-    document.getElementById('spec-children').textContent = `${d.children} ${d.children > 1 ? 'Seats' : 'Seat'}`;
-    document.getElementById('spec-title').textContent = d.name;
-    let description = `双舱组合：下方 [${d.lower}] ＋ 上方 [${d.upper}]。`;
-    if (isD02 && isLoaded) {
-      const mountNote = state.frameWidth === 650
-        ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。'
-        : '中档通过座舱两侧的一体式卡座直接连接车架。';
-      description += ` 两座均配有腿托和顶篷。${mountNote}座舱为概念设计，车架沿用 CAD。`;
-      const modelSize = new THREE.Box3().setFromObject(cached.group).getSize(new THREE.Vector3());
-      document.getElementById('spec-total-width').textContent = `约 ${Math.round(modelSize.z)} mm (${wheelSpec.name})`;
+  if (isChassis) {
+    title = '纯车架';
+    code = `STATE ${postureState}`;
+    posture = CHASSIS_POSTURES[postureState - 1];
+    children = 0;
+    description = '';
+  } else if (isParts) {
+    title = '其他零部件';
+    code = 'OTHER';
+    posture = '';
+    children = 0;
+    description = '独立展示车轮与横杆。';
+  } else if (isDouble && spec?.id === 'D02') {
+    description = frameWidth === 650
+      ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。座舱为概念设计。'
+      : '中档通过座舱两侧的一体式卡座直接连接车架。座舱为概念设计。';
+    if (d02Model) {
+      const modelSize = new THREE.Box3().setFromObject(d02Model).getSize(new THREE.Vector3());
+      totalWidth = `约 ${Math.round(modelSize.z)} mm`;
     }
-    document.getElementById('spec-desc').textContent = description;
-    pathEl.textContent = isLoaded
-      ? `已加载: ${cached.foundPath}`
-      : `查找路径: ${getCabinPaths('double', d.id).map(path => `models/${path}`).join('、')}`;
-    badgeEl.textContent = isLoaded ? (isD02 ? '✓ 双舱概念模型' : '✓ 双舱CAD') : '等待上传';
-    badgeEl.className = isLoaded
-      ? 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold'
-      : 'text-[10px] font-mono-num px-2 py-0.5 rounded-full bg-amber-100 text-amber-800';
   }
+
+  document.getElementById('spec-title').textContent = title || '模块化推车';
+  document.getElementById('spec-code').textContent = code || '';
+  document.getElementById('spec-frame-width').textContent = `${frameWidth} mm · ${widthName}`;
+  document.getElementById('spec-total-width').textContent = totalWidth;
+  document.getElementById('spec-wheelset').textContent = wheelSpec.name;
+  document.getElementById('spec-posture-label').textContent = isChassis ? '姿态' : '接口';
+  document.getElementById('spec-posture').textContent = posture || '';
+  document.getElementById('spec-children').textContent = `${children} 个`;
+  document.getElementById('frame-width-info').hidden = isParts;
+  document.getElementById('total-width-info').hidden = isParts;
+  document.getElementById('posture-info').hidden = !posture;
+  document.getElementById('child-capacity-info').hidden = !children;
+  const descriptionEl = document.getElementById('spec-desc');
+  descriptionEl.textContent = description;
+  descriptionEl.hidden = !description;
 }
 
 function setCameraView(view) {
@@ -1109,11 +1211,19 @@ function setCameraView(view) {
   controls.update();
 }
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+function resizePreview() {
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  if (!width || !height) return;
+  camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+  renderer.setSize(width, height, false);
+  fitPreview();
+}
+
+const previewObserver = new ResizeObserver(resizePreview);
+previewObserver.observe(container);
+resizePreview();
 
 buildD02StateControls();
 
