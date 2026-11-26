@@ -183,6 +183,13 @@ def rotation(axis, angle):
     return [*(value * math.sin(half_angle) for value in axis), math.cos(half_angle)]
 
 
+def compose_rotations(left, right):
+    a, b = left[:3], right[:3]
+    axis = cross(a, b)
+    return [*(left[3] * b[i] + right[3] * a[i] + axis[i] for i in range(3)),
+            left[3] * right[3] - sum(x * y for x, y in zip(a, b))]
+
+
 def clip(doc, binary, name, tracks):
     samplers, channels = [], []
     for node, path, times, values, *interpolation in tracks:
@@ -332,7 +339,7 @@ def guard_cradle(geometry, center):
     geometry.quad(outer_end[-1], inner_end[-1], inner_start[-1], outer_start[-1])
 
 
-def add_guardrail(doc, binary, name, base):
+def add_guardrail(doc, binary, name, base, *, rear):
     side_arm = [(-0.180, 0.219, 0.174), (-0.193, 0.262, 0.181), (-0.205, 0.315, 0.185),
                 (-0.211, 0.334, 0.177), (-0.215, 0.337, 0.163)]
     x, y, z = side_arm[0]
@@ -365,6 +372,35 @@ def add_guardrail(doc, binary, name, base):
          [(0, 0, 0), (0, 0.055, 0), (0, 0.055, 0.505), (0, 0.055, 0.505)]),
         (bar, "scale", (0, 0.94, 1), [(1, 1, 1), (0, 0, 0), (0, 0, 0)], "STEP"),
     ])
+
+    rest = (0.0, 0.0, 0.0)
+    for release_side, hinge, sign in (("Left", right_hinge, -1), ("Right", left_hinge, 1)):
+        if rear:
+            # Tip the bar below the handle before rotating its free end out.
+            times = (0, 0.12, 0.60, 0.75, 1)
+            stages = [(0, 0), (0, 10), (48, 10), (48, 20), (60, 20)]
+            rotations = [
+                compose_rotations(rotation(AXIS_Z, pitch), rotation(AXIS_Y, sign * swing))
+                for swing, pitch in stages
+            ]
+        else:
+            # Lift the latch, then swing laterally above the lower frame rail.
+            times = (0, 0.14, 0.5, 1)
+            stages = [(0, 0, 0), (6, 0, 0), (6, 23, -6), (10, 50, -12)]
+            rotations = [
+                compose_rotations(compose_rotations(rotation(AXIS_Y, sign * swing),
+                                                     rotation(AXIS_X, sign * lift)), rotation(AXIS_Z, twist))
+                for lift, swing, twist in stages
+            ]
+        clip(doc, binary, name + "_reverseGuard" + release_side, [(hinge, "rotation", times, rotations)])
+
+    release = (-0.080, -0.020, 0.0) if rear else (0.020, 0.060, 0.0)
+    apart = (*release[:2], 0.505)
+    release_tracks = [
+        (removal, "translation", (0, 0.28, 0.93, 1), [rest, release, apart, apart]),
+        (bar, "scale", (0, 0.94, 1), [(1, 1, 1), (0, 0, 0), (0, 0, 0)], "STEP"),
+    ]
+    clip(doc, binary, name + "_reverseGuardRemoved", release_tracks)
     return removal
 
 
@@ -487,6 +523,7 @@ MATERIALS = {
     "canopy_stay": ([0.112, 0.177, 0.212, 1.0], 0.10, 0.60),
 }
 AXIS_X = (1.0, 0.0, 0.0)
+AXIS_Y = (0.0, 1.0, 0.0)
 AXIS_Z = (0.0, 0.0, 1.0)
 LEG_AXIS = (-0.173, 0.087, 0.0)
 BACK_DEGREES = (95, 115, 135, 155, 175)
@@ -629,7 +666,7 @@ def add_backrest_canopy(doc, binary, name):
         hinges.beam(backrest_point(CANOPY_HUB_STATION, -0.007, side * 0.192),
                     (axle[0], axle[1], side * (CANOPY_BOW_RADIUS - 0.008)), 0.009)
         hinges.beam((axle[0], axle[1], side * (CANOPY_BOW_RADIUS - 0.012)),
-                    (axle[0], axle[1], side * (CANOPY_BOW_RADIUS + 0.012)), 0.013, sides=18)
+                    (axle[0], axle[1], side * (CANOPY_BOW_RADIUS + 0.004)), 0.013, sides=18)
     children.append(mesh_node(doc, binary, name + "_CanopyHinges", {"canopy_stay": hinges}, origin=BACK_PIVOT))
     return children
 
@@ -673,7 +710,7 @@ def make_seat(doc, binary, name, anchor, level, rear=False):
     harness.box((-0.064, 0.196, 0.0), (0.032, 0.032, 0.044))
     harness.beam((-0.115, 0.180, 0.0), (-0.071, 0.200, 0.0), 0.010, sides=8)
 
-    bar = add_guardrail(doc, binary, name, base)
+    bar = add_guardrail(doc, binary, name, base, rear=rear)
 
     legrest, legrest_mount, knee = add_legrest(doc, binary, name, rear)
 
@@ -705,7 +742,8 @@ def make_seat(doc, binary, name, anchor, level, rear=False):
     x, y = anchor
     extras = {"reversibleCabin": True}
     if not rear:
-        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=1)
+        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=1,
+                      interactiveFacings=["FR", "RF", "RR"])
     root = mesh_node(doc, binary, name, mounts, children=[seat],
                      translation=(c*x - s*y, s*x + c*y - ground, 0.0),
                      rotation=rotation(AXIS_Z, math.degrees(angle)), extras=extras)

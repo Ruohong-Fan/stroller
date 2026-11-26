@@ -733,6 +733,7 @@ const D02_COMPONENTS = [
 ];
 const D02_FRONT_BACKREST = 'D02_Front_backrest';
 const D02_FRONT_CANOPY = 'D02_Front_canopy';
+const D02_REAR_BACKREST = 'D02_Rear_backrest';
 const D02_REAR_LEGREST = 'D02_Rear_legrest';
 const D02_FIVE_POSITION_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
 const D02_ALLOW_REAR_LEGREST_AT_FRONT_FLAT = true;
@@ -755,7 +756,9 @@ let d02Mixer = null;
 let d02Loading = false;
 let d02ReclinePhase = null;
 let d02AllowedFacings = new Set(['FF']);
+let d02InteractiveFacings = new Set(['FF']);
 let d02FacingFallback = false;
+let d02BackToBackAdjusted = false;
 let d02RearLegrestAtFrontFlat = false;
 let d02FrontCanopyClearanceIndex = null;
 let d02FlatLegrestMotion = null;
@@ -818,7 +821,7 @@ function buildD02StateControls() {
 
       const control = {
         name: `D02_${seat}_${component.key}`,
-        seat, component: component.key, previewIndex: null,
+        seat, component: component.key, hints: component.hints, previewIndex: null,
         buttons: [], index: component.initial, action: null, transition: null,
         variants: component.variants || null, variantActions: [], activeIndex: 0
       };
@@ -847,7 +850,21 @@ function buildD02StateControls() {
 
 function frontReclineNeedsStowedLegrest(front) {
   const angle = D02_BACKREST_ANGLES[front.index];
-  return Boolean(front.action) && angle !== 95 && !(angle === 175 && d02RearLegrestAtFrontFlat);
+  return state.d02Facing === 'FF' && Boolean(front.action) && angle !== 95 && !(angle === 175 && d02RearLegrestAtFrontFlat);
+}
+
+function d02BackToBackLimit(control, index) {
+  if (state.d02Facing !== 'FR' || !d02InteractiveFacings.has('FR')) return '';
+  const front = d02ControlRows.get(D02_FRONT_BACKREST);
+  const rear = d02ControlRows.get(D02_REAR_BACKREST);
+  if (!front.action || !rear.action) return '';
+  if (control === rear && index === 4 && (front.index < 2 || front.action.time < d02PositionTime(front, 2))) {
+    return '前座靠背调至 135° 后，可将后座调至 175°。';
+  }
+  if (control === front && index < 2 && (rear.index === 4 || rear.action.time > d02PositionTime(rear, 3))) {
+    return '后座靠背调至 155° 后，可将前座调至 95° 或 115°。';
+  }
+  return '';
 }
 
 function updateD02StateControls() {
@@ -869,9 +886,10 @@ function updateD02StateControls() {
     });
   });
 
-  const fixedPreview = state.d02Facing !== 'FF';
+  const fixedPreview = !d02InteractiveFacings.has(state.d02Facing);
   const front = d02ControlRows.get(D02_FRONT_BACKREST);
   const rear = d02ControlRows.get(D02_REAR_LEGREST);
+  const rearBackrest = d02ControlRows.get(D02_REAR_BACKREST);
   const rearLegrestLocked = !fixedPreview && (Boolean(d02ReclinePhase) || frontReclineNeedsStowedLegrest(front));
   let availablePositions = 0;
   let positionCount = 0;
@@ -885,7 +903,9 @@ function updateD02StateControls() {
       const selected = available && index === selectedIndex;
       positionCount++;
       if (available) availablePositions++;
-      button.disabled = d02Loading || fixedPreview || !available || (control === rear && rearLegrestLocked);
+      const limit = d02BackToBackLimit(control, index);
+      button.disabled = d02Loading || fixedPreview || !available || Boolean(limit) || (control === rear && rearLegrestLocked);
+      if (control.component === 'backrest') button.title = limit || control.hints?.[index] || '';
       button.classList.toggle('card-active', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -896,6 +916,7 @@ function updateD02StateControls() {
   else if (!availablePositions) status.textContent = '此模型暂未提供可调状态。';
   else if (d02FacingFallback) status.textContent = '当前模型不支持此朝向，已恢复双座朝前。';
   else if (fixedPreview) status.textContent = '换向装配预览。切回双座朝前可继续调节。';
+  else if (d02BackToBackAdjusted) status.textContent = '背对背安装时，后座靠背已调至 155°。前座调至 135° 后可再放平后座。';
   else if (d02FlatLegrestMotion?.phase === 'returning') status.textContent = '前座顶篷正在恢复所选档位。';
   else if (d02FlatLegrestMotion?.phase === 'parking') status.textContent = '前座顶篷正在让位，后座腿托随后调整。';
   else if (d02FlatLegrestMotion) status.textContent = '后座腿托正在调整，前座顶篷保持收拢。';
@@ -903,8 +924,7 @@ function updateD02StateControls() {
   else if (d02ReclinePhase) status.textContent = '前座靠背正在调整，后座腿托暂时收至 5 档。';
   else if (rearLegrestLocked) status.textContent = '前座处于此角度时，后座腿托保持在 5 档反折位置，为靠背留出空间。';
   else if (availablePositions < positionCount) status.textContent = '此模型的部分动作暂不可用。';
-  else status.textContent = '';
-  const rearBackrest = d02ControlRows.get('D02_Rear_backrest');
+  else status.textContent = d02BackToBackLimit(rearBackrest, 4) || d02BackToBackLimit(front, 0);
   if (!d02Loading && !fixedPreview && rearBackrest.action && rearBackrest.index >= 2) {
     status.textContent += '后座靠背后仰时，推把同步伸出留出空间。';
   }
@@ -953,17 +973,29 @@ function hasD02FacingPreviewClips(preview, clips) {
   }));
 }
 
+function d02GuardClipName(seat, variant, reversed) {
+  return `D02_${seat}_${reversed ? variant.replace(/^guard/, 'reverseGuard') : variant}`;
+}
+
 function prepareD02FacingModel(model, animations) {
   d02AllowedFacings = new Set(['FF']);
+  d02InteractiveFacings = new Set(['FF']);
   const pairs = Object.keys(D02_FACING_PREVIEWS);
   if (!model || !pairs.length) return;
 
   const roots = D02_SEATS.map(([seat]) => model.getObjectByName(`D02_${seat}`));
   if (roots.every(root => root?.userData.reversibleCabin === true)) {
     const clips = new Map(animations.map(clip => [clip.name, clip]));
+    const interactive = roots[0].userData.interactiveFacings;
     for (const pair of pairs) {
       const preview = getD02FacingPreview(pair);
-      if (preview && hasD02FacingPreviewClips(preview, clips)) d02AllowedFacings.add(pair);
+      if (!preview || !hasD02FacingPreviewClips(preview, clips)) continue;
+      d02AllowedFacings.add(pair);
+      const supportsReverseGuards = D02_SEATS.every(([seat], index) => pair[index] !== 'R' ||
+        ['guardLeft', 'guardRight', 'guardRemoved'].every(variant =>
+          clips.get(d02GuardClipName(seat, variant, true))?.duration > 0
+        ));
+      if (Array.isArray(interactive) && interactive.includes(pair) && supportsReverseGuards) d02InteractiveFacings.add(pair);
     }
   }
 
@@ -992,6 +1024,7 @@ function bindD02PoseModel(model, animations) {
   d02Loading = false;
   d02ReclinePhase = null;
   d02FlatLegrestMotion = null;
+  d02BackToBackAdjusted = false;
   const frontMetadata = model?.getObjectByName('D02_Front')?.userData;
   d02RearLegrestAtFrontFlat = D02_ALLOW_REAR_LEGREST_AT_FRONT_FLAT && frontMetadata?.rearLegrestAtFrontFlat === true;
   const clearanceGear = frontMetadata?.frontCanopyClearanceGear;
@@ -1000,7 +1033,13 @@ function bindD02PoseModel(model, animations) {
     Number.isInteger(clearanceGear) && clearanceGear >= 1 && clearanceGear <= 3
     ? clearanceGear - 1 : null;
   const clips = new Map(animations.map(clip => [clip.name, clip]));
-  const preview = getD02FacingPreview(state.d02Facing);
+  const preview = d02InteractiveFacings.has(state.d02Facing) ? null : getD02FacingPreview(state.d02Facing);
+  if (state.d02Facing === 'FR' && !preview &&
+      d02ControlRows.get(D02_FRONT_BACKREST).index < 2 && d02ControlRows.get(D02_REAR_BACKREST).index === 4) {
+    d02ControlRows.get(D02_REAR_BACKREST).index = 3;
+    d02BackToBackAdjusted = true;
+    syncConfiguratorRoute();
+  }
   const supportsStow = supportsD02RotationTimes(clips.get(D02_REAR_LEGREST), '_Legrest.quaternion', D02_FIVE_POSITION_SAMPLES);
   for (const [name, control] of d02ControlRows) {
     control.action = null;
@@ -1009,8 +1048,10 @@ function bindD02PoseModel(model, animations) {
     control.previewIndex = preview ? preview[control.seat][control.component] : null;
     const initialIndex = control.previewIndex ?? control.index;
     if (control.variants) {
-      const prefix = name.slice(0, -'guardrail'.length);
-      control.variantActions = control.variants.map(variant => variant ? createD02Action(clips.get(prefix + variant)) : null);
+      const seatIndex = control.seat === 'Front' ? 0 : 1;
+      const reversed = !preview && state.d02Facing[seatIndex] === 'R';
+      control.variantActions = control.variants.map(variant => variant
+        ? createD02Action(clips.get(d02GuardClipName(control.seat, variant, reversed))) : null);
       control.action = control.variantActions[initialIndex] || null;
       if (control.action) {
         control.activeIndex = initialIndex;
@@ -1147,12 +1188,13 @@ function queueD02Guard(control, now) {
 }
 
 function setD02Position(control, index) {
-  if (state.d02Facing !== 'FF' || control.buttons[index].disabled || index === control.index) return;
+  if (control.buttons[index].disabled || index === control.index) return;
   control.index = index;
+  d02BackToBackAdjusted = false;
   const now = performance.now();
   if (control.variants) queueD02Guard(control, now);
-  else if (control.name === D02_FRONT_BACKREST) startD02FrontRecline(now);
-  else if (control.name === D02_REAR_LEGREST) startD02RearLegrestMotion(d02PositionTime(control), now);
+  else if (state.d02Facing === 'FF' && control.name === D02_FRONT_BACKREST) startD02FrontRecline(now);
+  else if (state.d02Facing === 'FF' && control.name === D02_REAR_LEGREST) startD02RearLegrestMotion(d02PositionTime(control), now);
   else if (control.name === D02_FRONT_CANOPY && d02FlatLegrestMotion) {
     // Save the requested gear now, but don't raise the canopy before the rear legrest settles.
     if (d02FlatLegrestMotion.phase === 'returning') startD02Transition(control, d02PositionTime(control), now);
@@ -1162,8 +1204,9 @@ function setD02Position(control, index) {
 }
 
 function animateD02Poses(now) {
-  if (!d02Mixer) return;
+  if (!d02Mixer || d02Loading) return;
   let updated = false;
+  let backrestSettled = false;
   for (const control of d02ControlRows.values()) {
     const transition = control.transition;
     if (!transition) continue;
@@ -1172,6 +1215,7 @@ function animateD02Poses(now) {
     control.action.time = progress === 1 ? transition.to : transition.from + (transition.to - transition.from) * eased;
     if (progress === 1) {
       control.transition = null;
+      if (control.component === 'backrest') backrestSettled = true;
       if (control.variants && transition.to === 0) queueD02Guard(control, now);
     }
     updated = true;
@@ -1179,6 +1223,7 @@ function animateD02Poses(now) {
   advanceD02FlatLegrestMotion(now);
   advanceD02FrontRecline(now);
   if (updated) d02Mixer.update(0);
+  if (backrestSettled && state.d02Facing === 'FR') updateD02StateControls();
 }
 
 // ============================================================================
