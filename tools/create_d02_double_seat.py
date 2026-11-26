@@ -6,7 +6,6 @@ from __future__ import annotations
 import math
 import pathlib
 import struct
-from bisect import bisect_right
 
 from d02_front_mount import relocate_front_ports, relocate_high_ports
 from generate_wheel_variants import read_positions, write_glb
@@ -133,17 +132,18 @@ class Geometry:
         ref = (0.0, 0.0, 1.0) if abs(axis[2]) < 0.9 else (0.0, 1.0, 0.0)
         self.tube([start, end], radius, ref, sides)
 
-    def tube(self, path, radius, ref, sides=8):
+    def tube(self, path, radius, ref, sides=8, *, taper=None, capped=True):
         rings = []
         for i, point in enumerate(path):
             tangent = unit(sub(path[min(i + 1, len(path) - 1)], path[max(i - 1, 0)]))
             u = unit(cross(tangent, ref))
             v = unit(cross(tangent, u))
+            ring_radius = radius if taper is None else radius * taper[i]
             ring = []
             for j in range(sides):
                 angle = 2 * math.pi * j / sides
                 ring.append(tuple(
-                    point[k] + radius * (u[k] * math.cos(angle) + v[k] * math.sin(angle))
+                    point[k] + ring_radius * (u[k] * math.cos(angle) + v[k] * math.sin(angle))
                     for k in range(3)
                 ))
             rings.append(ring)
@@ -151,10 +151,11 @@ class Geometry:
             for i in range(sides):
                 j = (i + 1) % sides
                 self.quad(a[i], a[j], b[j], b[i])
-        for i in range(sides):
-            j = (i + 1) % sides
-            self.triangle(path[0], rings[0][j], rings[0][i])
-            self.triangle(path[-1], rings[-1][i], rings[-1][j])
+        if capped:
+            for i in range(sides):
+                j = (i + 1) % sides
+                self.triangle(path[0], rings[0][j], rings[0][i])
+                self.triangle(path[-1], rings[-1][i], rings[-1][j])
 
 
 def accessor(doc, binary, values, kind, *, vertex=False, bounds=False):
@@ -194,145 +195,63 @@ def clip(doc, binary, name, tracks):
     doc.setdefault("animations", []).append({"name": name, "samplers": samplers, "channels": channels})
 
 
-def dome_bow(crown, edge, half_width):
-    """Place a transverse bow by distance up and outward from the backrest pivot."""
+# The four bows rotate on the same transverse axle. A 25° rear bow and
+# a 155° front bow enclose a hemisphere at full deployment.
+CANOPY_HUB_STATION = 0.315
+CANOPY_HUB_OUTSET = 0.040
+CANOPY_BOW_RADIUS = 0.201
+CANOPY_SLEEVE_RADIUS = 0.0042
+CANOPY_REAR_ANGLE = -25
+CANOPY_LEADING_ANGLES = (-1, 86, 120, 140, 155)
+CANOPY_ARC_SEGMENTS = 20
+
+
+def backrest_point(station, outset, z=0.0):
     sine, cosine = math.sin(BACKREST_TILT), math.cos(BACKREST_TILT)
-
-    def point(up, outward):
-        return (BACK_PIVOT[0] + sine * up - cosine * outward,
-                BACK_PIVOT[1] + cosine * up + sine * outward)
-
-    return (*point(*crown), *point(*edge), half_width)
+    return (BACK_PIVOT[0] + sine * station - cosine * outset,
+            BACK_PIVOT[1] + cosine * station + sine * outset, z)
 
 
-# Center and side coordinates of the transverse bows from the fixed rear
-# seam along the roof. Each row lists center X/Y, side X/Y, and half width.
-CANOPY_REAR_BOW = (0.266, 0.637, 0.256, 0.581, 0.188)
-CANOPY_BOW_PATH = (
-    (
-        (0.269, 0.644, 0.256, 0.584, 0.189), (0.269, 0.651, 0.256, 0.590, 0.190),
-        (0.265, 0.657, 0.254, 0.597, 0.191), (0.258, 0.661, 0.249, 0.605, 0.192),
-        (0.250, 0.663, 0.244, 0.613, 0.191),
-    ), (
-        (0.253, 0.657, 0.247, 0.595, 0.188), (0.231, 0.679, 0.230, 0.610, 0.190),
-        (0.203, 0.699, 0.211, 0.624, 0.191), (0.170, 0.702, 0.185, 0.634, 0.192),
-        (0.133, 0.711, 0.160, 0.638, 0.191),
-    ), (
-        (0.247, 0.653, 0.251, 0.599, 0.189), (0.221, 0.683, 0.233, 0.631, 0.191),
-        (0.119, 0.714, 0.151, 0.629, 0.192), (0.029, 0.712, 0.110, 0.630, 0.192),
-        (-0.028552, 0.689342, 0.083, 0.647, 0.190),
-    ), (
-        dome_bow((0.512, -0.010), (0.462, -0.032), 0.190),
-        dome_bow((0.520, 0.050), (0.473, -0.007), 0.191),
-        dome_bow((0.506, 0.154), (0.454, 0.071), 0.193),
-        dome_bow((0.461, 0.239), (0.445, 0.126), 0.192),
-        dome_bow((0.411, 0.269), (0.454, 0.132), 0.188),
-    ),
-)
-CANOPY_BOWS_AT_RELEASE = (*CANOPY_BOW_PATH[-1][:-1],
-                          dome_bow((0.439, 0.268), (0.459, 0.139), 0.189))
-
-# The shade is rolled in the early poses and extends to the chest at the end.
-CANOPY_VISOR_PATH = (
-    ((0.246, 0.661, 0.242, 0.611, 0.190),),
-    ((0.127, 0.707, 0.155, 0.636, 0.190),),
-    ((-0.021, 0.677, 0.088, 0.627, 0.185),),
-    (
-        dome_bow((0.397, 0.266), (0.436, 0.111), 0.185),
-        dome_bow((0.328, 0.235), (0.337, 0.110), 0.185),
-        dome_bow((0.235, 0.234), (0.235, 0.105), 0.185),
-        dome_bow((0.145, 0.192), (0.142, 0.100), 0.186),
-    ),
-)
-CANOPY_VISOR_FOLDED = (
-    dome_bow((0.434, 0.266), (0.454, 0.132), 0.188),
-    dome_bow((0.429, 0.260), (0.447, 0.123), 0.188),
-    dome_bow((0.422, 0.250), (0.440, 0.111), 0.187),
-    dome_bow((0.410, 0.236), (0.424, 0.107), 0.186),
-)
+def canopy_direction(angle):
+    heading = math.pi / 2 - BACKREST_TILT + math.radians(angle)
+    return math.cos(heading), math.sin(heading)
 
 
-def canopy_geometry(bow_stop, visor_bows):
-    bows = [CANOPY_REAR_BOW, *bow_stop]
-    fabric, trim = Geometry(), Geometry()
+def canopy_arc(radius, angle, center=(0.0, 0.0, 0.0)):
+    """A semicircle with both ends on the left–right hinge axis."""
+    x, y, z = center
+    dx, dy = canopy_direction(angle)
+    points = []
+    for i in range(CANOPY_ARC_SEGMENTS + 1):
+        phi = math.pi * i / CANOPY_ARC_SEGMENTS
+        radial = radius * math.sin(phi)
+        points.append((x + dx * radial, y + dy * radial, z - radius * math.cos(phi)))
+    return points
 
-    def arch(bow):
-        cx, cy, sx, sy, half_width = bow
-        points = []
-        for j in range(25):
-            theta = math.pi * j / 24
-            height = math.sin(theta) ** 0.52
-            points.append((sx + (cx - sx) * height, sy + (cy - sy) * height, -half_width * math.cos(theta)))
-        return points
 
-    def join_rows(rear, leading):
-        for j in range(len(rear) - 1):
-            fabric.quad(rear[j], leading[j], leading[j + 1], rear[j + 1])
+def canopy_fabric(axle, leading_angle):
+    fabric = Geometry()
+    # Six strips between each pair of bows. Both poles meet in the hubs.
+    strips = 18
+    radius = CANOPY_BOW_RADIUS + CANOPY_SLEEVE_RADIUS
+    rows = [canopy_arc(radius, CANOPY_REAR_ANGLE + (leading_angle - CANOPY_REAR_ANGLE) * i / strips, axle)
+            for i in range(strips + 1)]
 
-    def blend_bows(start, end, t):
-        return tuple(a + (b - a) * t for a, b in zip(start, end))
-
-    rows = [arch(bows[0])]
-    for i, (left, right) in enumerate(zip(bows, bows[1:])):
-        before = bows[max(i - 1, 0)]
-        after = bows[min(i + 2, len(bows) - 1)]
-        for j in range(1, 6):
-            t = j / 5
-            smooth = 3 * t**2 - 2 * t**3
-            start_tangent = t * (1 - t)**2
-            end_tangent = t**2 * (t - 1)
-            rows.append(arch([
-                x + (y - x) * smooth + (y - w) * start_tangent / 2 + (z - x) * end_tangent / 2
-                for w, x, y, z in zip(before, left, right, after)
-            ]))
-
-    # The center binding enters the top cap of the backrest. Its ends
-    # turn down into the two shoulders, underneath the fabric side seams.
-    binding = []
-    for j in range(len(rows[0])):
-        across = -math.cos(math.pi * j / (len(rows[0]) - 1))
+    # The rear skirt is sewn continuously into the top and sides of the shell.
+    rear_seam = []
+    for _, _, z in rows[0]:
+        across = z / radius
         shoulder = abs(across) ** 6
-        binding.append((0.214 + 0.012 * shoulder, 0.596 - 0.029 * shoulder, 0.196 * across))
-    join_rows(binding, rows[0])
+        rear_seam.append((0.214 + 0.012 * shoulder, 0.596 - 0.029 * shoulder, 0.196 * across))
+    for j in range(CANOPY_ARC_SEGMENTS):
+        fabric.quad(rear_seam[j], rows[0][j], rows[0][j + 1], rear_seam[j + 1])
     for back, front in zip(rows, rows[1:]):
-        join_rows(back, front)
+        fabric.triangle(back[0], front[1], back[1])
+        for j in range(1, CANOPY_ARC_SEGMENTS - 1):
+            fabric.quad(back[j], front[j], front[j + 1], back[j + 1])
+        fabric.triangle(back[-2], front[-2], back[-1])
 
-    # The unused material rolls into the front binding at partial stops.
-    if len(visor_bows) == 1:
-        visor_bows = [blend_bows(bows[-1], visor_bows[0], t) for t in (0.25, 0.5, 0.75, 1)]
-    # Ease the fabric around each inner bow to round the dome's profile.
-    profile = [bows[-1], *visor_bows]
-    visor_rows = [rows[-1]]
-    for before, bow, after in zip(profile, profile[1:], profile[2:]):
-        incoming = blend_bows(bow, before, 0.08)
-        outgoing = blend_bows(bow, after, 0.08)
-        for t in ADJUSTMENT_STEPS:
-            visor_rows.append(arch(blend_bows(blend_bows(incoming, bow, t), blend_bows(bow, outgoing, t), t)))
-    visor_rows.append(arch(profile[-1]))
-    for back, front in zip(visor_rows, visor_rows[1:]):
-        join_rows(back, front)
-
-    # The internal bow lies within the fabric. Only the continuous outer
-    # hem has a front binding, so the canopy opens as a single profile.
-    for row, radius in ((rows[0], 0.004), (rows[10], 0.003), (rows[20], 0.003),
-                        (visor_rows[-1], 0.0045)):
-        trim.tube(row, radius, (1.0, 0.0, 0.0))
-    for side, edge in ((-1, 0), (1, -1)):
-        hinge = (*CANOPY_EYE, side * 0.1997)
-        trim.tube([row[edge] for row in rows], 0.004, (0.0, 0.0, 1.0))
-        elbow = (0.251, 0.605, side * 0.1997)
-        trim.tube([hinge, elbow, rows[0][edge]], 0.0025, AXIS_Z)
-        # A continuous side gusset closes the path to the backrest.
-        # Its roots stay under the finished side edge of the shell.
-        shoulder = (0.202, 0.485, side * 0.196)
-        border = [row[edge] for row in rows + visor_rows[1:]]
-        for j, (a, b) in enumerate(zip(border, border[1:])):
-            t, u = j / (len(border) - 1), (j + 1) / (len(border) - 1)
-            root_a = tuple(x + (y - x) * t for x, y in zip(binding[edge], shoulder))
-            root_b = tuple(x + (y - x) * u for x, y in zip(binding[edge], shoulder))
-            fabric.quad(root_a, a, b, root_b)
-        trim.tube([shoulder, *[row[edge] for row in reversed(visor_rows)]], 0.0025, AXIS_Z)
-    return {"canopy": fabric, "canopy_trim": trim}
+    return {"canopy": fabric}
 
 
 def insert_shoe(shoe, latch, side, span):
@@ -563,7 +482,8 @@ MATERIALS = {
     "legrest_shell": ([0.076, 0.092, 0.107, 1.0], 0.08, 0.63),
     "legrest_arm": ([0.167, 0.223, 0.260, 1.0], 0.24, 0.58),
     "canopy": ([0.115, 0.184, 0.235, 1.0], 0.0, 0.87),
-    "canopy_trim": ([0.050, 0.077, 0.099, 1.0], 0.0, 0.76),
+    "canopy_rib": ([0.19, 0.24, 0.26, 1.0], 0.42, 0.52),
+    "canopy_sleeve": ([0.098, 0.154, 0.195, 1.0], 0.0, 0.87),
     "canopy_stay": ([0.112, 0.177, 0.212, 1.0], 0.10, 0.60),
 }
 AXIS_X = (1.0, 0.0, 0.0)
@@ -572,7 +492,6 @@ LEG_AXIS = (-0.173, 0.087, 0.0)
 BACK_DEGREES = (95, 115, 135, 155, 175)
 BACK_ROTATIONS = tuple(106 - degrees for degrees in BACK_DEGREES)
 ADJUSTMENT_STEPS = (0, 0.25, 0.5, 0.75, 1)
-CANOPY_EYE = (0.222, 0.552)
 
 
 def add_node(doc, **node):
@@ -669,45 +588,50 @@ def hip_cover(angle):
     return textile_strip(sections)
 
 
-def canopy_motion(hem_centers):
-    # Time the clip by distance traveled at the center of the front hem.
-    # Keep the original geometry keys so the canopy follows the tested path.
-    traveled = [0.0]
-    for start, end in zip(hem_centers, hem_centers[1:]):
-        traveled.append(traveled[-1] + math.dist(start, end))
-    path_times = [distance / traveled[-1] for distance in traveled]
-    times = sorted(set(path_times) | set(ADJUSTMENT_STEPS))
-    morph_count = len(path_times) - 1
-    weights = []
-    for time in times[:-1]:
-        left = bisect_right(path_times, time) - 1
-        progress = (time - path_times[left]) / (path_times[left + 1] - path_times[left])
-        frame = [0.0] * morph_count
-        frame[left] = 1.0 - progress
-        if left + 1 < morph_count:
-            frame[left + 1] = progress
-        weights.extend((weight,) for weight in frame)
-    weights.extend([(0.0,)] * morph_count)
-    return times, weights
-
-
 def add_backrest_canopy(doc, binary, name):
-    # The canopy deploys independently and inherits the backrest rotation.
-    path = list(zip(CANOPY_BOW_PATH, CANOPY_VISOR_PATH))
-    # Bring the roof forward before letting out its hem. This keeps the
-    # fourth rear legrest position clear while the front back is flat.
-    path.insert(-1, (CANOPY_BOWS_AT_RELEASE, CANOPY_VISOR_FOLDED))
-    shapes = [canopy_geometry(bows, visor) for bows, visor in path]
-    times, weights = canopy_motion([visor[-1][:2] for _, visor in path])
-    canopy = mesh_node(doc, binary, name + "_Canopy", shapes[-1], origin=BACK_PIVOT, morphs=shapes[:-1])
-    clip(doc, binary, name + "_canopy", [(canopy, "weights", times, weights)])
+    axle = backrest_point(CANOPY_HUB_STATION, CANOPY_HUB_OUTSET)
+    # The circular supports use rigid rotation. Sample the textile between
+    # gears so it stays close to its sewn sleeves while the bows move.
+    times, frames = [], []
+    for gear, (start, end) in enumerate(zip(CANOPY_LEADING_ANGLES, CANOPY_LEADING_ANGLES[1:])):
+        segments = math.ceil((end - start) / 10)
+        for step in range(segments):
+            progress = step / segments
+            times.append((gear + progress) / 4)
+            frames.append(canopy_fabric(axle, start + (end - start) * progress))
+    times.append(1.0)
+    frames.append(canopy_fabric(axle, CANOPY_LEADING_ANGLES[-1]))
+    target_count = len(frames) - 1
+    weights = [(float(i == target),) for i in range(len(frames)) for target in range(target_count)]
+    cloth = mesh_node(doc, binary, name + "_Canopy", frames[-1], origin=BACK_PIVOT, morphs=frames[:-1])
+    tracks = [(cloth, "weights", times, weights)]
+    children = [cloth]
+
+    arc = canopy_arc(CANOPY_BOW_RADIUS, 0)
+    dx, dy = canopy_direction(0)
+    normal = (-dy, dx, 0.0)
+    rib, sleeve = Geometry(), Geometry()
+    # The narrow ends enter the common axle housing side by side when folded.
+    taper = [max(0.12, min(1.0, math.hypot(x, y) / 0.052)) for x, y, _ in arc]
+    rib.tube(arc, 0.0025, normal, taper=taper)
+    sleeve.tube(arc[2:-2], CANOPY_SLEEVE_RADIUS, normal, capped=False)
+    for i, share in enumerate((0.0, 1 / 3, 2 / 3, 1.0), start=1):
+        rotations = [rotation(AXIS_Z, CANOPY_REAR_ANGLE + share * (lead - CANOPY_REAR_ANGLE))
+                     for lead in CANOPY_LEADING_ANGLES]
+        bow = mesh_node(doc, binary, f"{name}_CanopyBow{i}", {"canopy_rib": rib, "canopy_sleeve": sleeve},
+                        translation=sub(axle, BACK_PIVOT), rotation=rotations[-1])
+        tracks.append((bow, "rotation", ADJUSTMENT_STEPS, rotations))
+        children.append(bow)
+    clip(doc, binary, name + "_canopy", tracks)
 
     hinges = Geometry()
-    x, y = CANOPY_EYE
     for side in (-1, 1):
-        hinges.beam((x, y, side * 0.180), (x, y, side * 0.202), 0.021)
-    hinge_node = mesh_node(doc, binary, name + "_CanopyHinges", {"canopy_stay": hinges}, origin=BACK_PIVOT)
-    return [canopy, hinge_node]
+        hinges.beam(backrest_point(CANOPY_HUB_STATION, -0.007, side * 0.192),
+                    (axle[0], axle[1], side * (CANOPY_BOW_RADIUS - 0.008)), 0.009)
+        hinges.beam((axle[0], axle[1], side * (CANOPY_BOW_RADIUS - 0.012)),
+                    (axle[0], axle[1], side * (CANOPY_BOW_RADIUS + 0.012)), 0.013, sides=18)
+    children.append(mesh_node(doc, binary, name + "_CanopyHinges", {"canopy_stay": hinges}, origin=BACK_PIVOT))
+    return children
 
 
 def handle_extension(doc, binary, level):
@@ -781,7 +705,7 @@ def make_seat(doc, binary, name, anchor, level, rear=False):
     x, y = anchor
     extras = {"reversibleCabin": True}
     if not rear:
-        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=2)
+        extras.update(rearLegrestAtFrontFlat=True, frontCanopyClearanceGear=1)
     root = mesh_node(doc, binary, name, mounts, children=[seat],
                      translation=(c*x - s*y, s*x + c*y - ground, 0.0),
                      rotation=rotation(AXIS_Z, math.degrees(angle)), extras=extras)

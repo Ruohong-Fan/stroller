@@ -717,8 +717,8 @@ const D02_COMPONENTS = [
   },
   {
     key: 'canopy', label: '顶篷', initial: 4,
-    positions: ['1 微展', '2', '3', '4', '5 遮光'],
-    hints: ['1 档，最小展开', '2 档，小幅展开', '3 档，中幅展开', '4 档，大幅展开', '5 档，全展遮至胸口']
+    positions: ['1 微展', '2 遮顶', '3 斜光', '4 加深', '5 全展'],
+    hints: ['1 档，最小展开', '2 档，主篷遮住头顶', '3 档，加深遮挡前方斜射光', '4 档，进一步加深遮挡', '5 档，全展遮至胸口']
   },
   {
     key: 'legrest', label: '腿托', initial: 0,
@@ -1565,7 +1565,7 @@ function restoreD02PoseRoute(seat, value) {
     let selection = choices.findIndex(choice => String(choice) === token);
     if (component.key === 'canopy' && /^[0-3]$/.test(token || '')) {
       // Map older four-position links to the closest current openings.
-      selection = [0, 0, 2, 4][Number(token)];
+      selection = [0, 0, 1, 4][Number(token)];
     }
     const control = d02ControlRows.get(`D02_${seat}_${component.key}`);
     control.index = selection < 0 ? component.initial : selection;
