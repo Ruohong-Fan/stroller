@@ -316,32 +316,31 @@ def add_width_adapter(doc, binary, station, centers):
         doc["scenes"][doc.get("scene", 0)]["nodes"].append(index)
 
 
-def guard_cradle(geometry, center):
-    """Low, open-top dock. The free terminal leaves it upward."""
+def guard_cradle(geometry, center, side):
+    """Leave the front of the vertical pin socket open for withdrawal."""
     x, y, z = center
-    arcs = []
-    for end in (x - 0.007, x + 0.007):
-        rings = []
-        for radius in (0.023, 0.016):
-            rings.append([
-                (end, y - radius * math.sin(math.pi * i / 12), z + radius * math.cos(math.pi * i / 12))
-                for i in range(13)
-            ])
-        arcs.append(rings)
-    (outer_start, inner_start), (outer_end, inner_end) = arcs
-    for i in range(12):
-        j = i + 1
-        geometry.quad(outer_start[i], outer_end[i], outer_end[j], outer_start[j])
-        geometry.quad(inner_start[j], inner_end[j], inner_end[i], inner_start[i])
-        geometry.quad(outer_start[j], inner_start[j], inner_start[i], outer_start[i])
-        geometry.quad(outer_end[i], inner_end[i], inner_end[j], outer_end[j])
-    geometry.quad(outer_start[0], inner_start[0], inner_end[0], outer_end[0])
-    geometry.quad(outer_end[-1], inner_end[-1], inner_start[-1], outer_start[-1])
+    angles = [math.radians(-125 + 150 * i / 16) for i in range(17)]
+    profile = [(0.022, -0.023), (0.023, -0.010), (0.016, -0.009), (0.016, -0.023)]
+    arcs = [
+        [(x + radius * math.cos(angle), y + height, z + side * radius * math.sin(angle))
+         for angle in angles]
+        for radius, height in profile
+    ]
+
+    def face(*points):
+        geometry.quad(*(reversed(points) if side > 0 else points))
+
+    for a, b in zip(arcs, arcs[1:] + arcs[:1]):
+        for i in range(len(angles) - 1):
+            face(a[i], a[i + 1], b[i + 1], b[i])
+    face(*(arc[0] for arc in arcs))
+    face(*(arc[-1] for arc in reversed(arcs)))
 
 
 def add_guardrail(doc, binary, name, base, *, rear):
-    side_arm = [(-0.180, 0.219, 0.174), (-0.193, 0.262, 0.181), (-0.205, 0.315, 0.185),
-                (-0.211, 0.334, 0.177), (-0.215, 0.337, 0.163)]
+    # Mount at the sides of the seat near the hip pivot, then wrap across the waist.
+    side_arm = [(0.001, 0.303, 0.176), (-0.03844, 0.306, 0.187), (-0.07672, 0.3095, 0.181),
+                (-0.10572, 0.312, 0.178), (-0.115, 0.313, 0.154)]
     x, y, z = side_arm[0]
     left, right = (x, y, z), (x, y, -z)
     rail = Geometry()
@@ -350,57 +349,52 @@ def add_guardrail(doc, binary, name, base, *, rear):
     for end in (left, right):
         _, _, lateral = end
         side = math.copysign(1, lateral)
-        dock_x = x + 0.024
-        # Only the axial pin enters the dock. The rail bends forward of it,
-        # leaving both the retained dock and the release button out of its sweep.
-        rail.beam((x - 0.008, y, lateral), (dock_x + 0.004, y, lateral), 0.012)
-        guard_cradle(base["guard_dock"], (dock_x, y, lateral))
-        base["guard_dock"].box((dock_x, y - 0.025, side * 0.174), (0.014, 0.018, 0.024))
-        base["guard_release"].beam((dock_x, y - 0.010, lateral + side * 0.013),
-                                   (dock_x, y - 0.010, lateral + side * 0.018), 0.007)
+        # Center the vertical pin on the retained end's swing axis.
+        rail.beam((x, y - 0.014, lateral), (x, y + 0.007, lateral), 0.010)
+        guard_cradle(base["guard_dock"], end, side)
+        dock_x = x + 0.008
+        post_bottom, post_top = 0.180, y - 0.022
+        base["guard_dock"].box((dock_x, (post_top + post_bottom) / 2, side * 0.184),
+                               (0.033, post_top - post_bottom, 0.032))
+        base["guard_release"].beam((dock_x, y - 0.032, lateral + side * 0.022),
+                                   (dock_x, y - 0.032, lateral + side * 0.028), 0.007)
 
     # Each endpoint is a separate pivot. At most one is opened at a time.
     bar = mesh_node(doc, binary, name + "_FullGuard", {"guardrail": rail}, origin=left)
     left_hinge = add_node(doc, name=name + "_LeftGuardPivot", translation=sub(left, right), children=[bar])
     right_hinge = add_node(doc, name=name + "_RightGuardPivot", translation=right, children=[left_hinge])
     removal = add_node(doc, name=name + "_GuardRemoval", children=[right_hinge])
-    for release_side, hinge, angle in (("Left", right_hinge, -110), ("Right", left_hinge, 110)):
-        clip(doc, binary, name + "_guard" + release_side,
-             [(hinge, "rotation", (0, 1), [rotation(AXIS_X, a) for a in (0, angle)])])
-    clip(doc, binary, name + "_guardRemoved", [
-        (removal, "translation", (0, 0.28, 0.93, 1),
-         [(0, 0, 0), (0, 0.055, 0), (0, 0.055, 0.505), (0, 0.055, 0.505)]),
-        (bar, "scale", (0, 0.94, 1), [(1, 1, 1), (0, 0, 0), (0, 0, 0)], "STEP"),
-    ])
-
-    rest = (0.0, 0.0, 0.0)
+    times = (0, 0.14, 0.5, 1)
+    # Lift the release end before swinging it outboard.
+    open_stages = [(0, 0, 0), (5, 0, 0), (5, 30, 0), (8, 58, 0)]
+    # The high seat faces the push handle when reversed. Dip the bow below it
+    # as the bar swings to the side.
+    reverse_stages = [(0, 0, 0), (3, 0, 0), (0, 18, -8), (-10, 60, -28)] if rear else open_stages
     for release_side, hinge, sign in (("Left", right_hinge, -1), ("Right", left_hinge, 1)):
-        if rear:
-            # Tip the bar below the handle before rotating its free end out.
-            times = (0, 0.12, 0.60, 0.75, 1)
-            stages = [(0, 0), (0, 10), (48, 10), (48, 20), (60, 20)]
+        for motion, stages in (("guard", open_stages), ("reverseGuard", reverse_stages)):
             rotations = [
-                compose_rotations(rotation(AXIS_Z, pitch), rotation(AXIS_Y, sign * swing))
-                for swing, pitch in stages
+                compose_rotations(
+                    compose_rotations(rotation(AXIS_Y, sign * swing), rotation(AXIS_X, sign * lift)),
+                    rotation(AXIS_Z, pitch),
+                )
+                for lift, swing, pitch in stages
             ]
-        else:
-            # Lift the latch, then swing laterally above the lower frame rail.
-            times = (0, 0.14, 0.5, 1)
-            stages = [(0, 0, 0), (6, 0, 0), (6, 23, -6), (10, 50, -12)]
-            rotations = [
-                compose_rotations(compose_rotations(rotation(AXIS_Y, sign * swing),
-                                                     rotation(AXIS_X, sign * lift)), rotation(AXIS_Z, twist))
-                for lift, swing, twist in stages
-            ]
-        clip(doc, binary, name + "_reverseGuard" + release_side, [(hinge, "rotation", times, rotations)])
+            clip(doc, binary, f"{name}_{motion}{release_side}", [(hinge, "rotation", times, rotations)])
 
-    release = (-0.080, -0.020, 0.0) if rear else (0.020, 0.060, 0.0)
-    apart = (*release[:2], 0.505)
-    release_tracks = [
-        (removal, "translation", (0, 0.28, 0.93, 1), [rest, release, apart, apart]),
-        (bar, "scale", (0, 0.94, 1), [(1, 1, 1), (0, 0, 0), (0, 0, 0)], "STEP"),
-    ]
-    clip(doc, binary, name + "_reverseGuardRemoved", release_tracks)
+    # Withdraw both pins through the open faces before sliding the complete bar away.
+    rest = (0, 0, 0)
+    removal_times = (0, 0.15, 0.32, 0.93, 1)
+    removal_path = [rest, (-0.080, 0, 0), (-0.080, 0.015, 0), (-0.080, 0.015, 0.505)]
+    reverse_times, reverse_path = removal_times, removal_path
+    if rear:
+        reverse_times = (0, 0.22, 0.44, 0.93, 1)
+        reverse_path = [rest, (-0.100, 0, 0), (-0.100, -0.080, 0), (-0.100, -0.080, 0.505)]
+    for motion, times, path in (("guardRemoved", removal_times, removal_path),
+                                ("reverseGuardRemoved", reverse_times, reverse_path)):
+        clip(doc, binary, f"{name}_{motion}", [
+            (removal, "translation", times, [*path, path[-1]]),
+            (bar, "scale", (0, 0.94, 1), [(1, 1, 1), (0, 0, 0), (0, 0, 0)], "STEP"),
+        ])
     return removal
 
 
