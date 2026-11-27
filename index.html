@@ -135,6 +135,21 @@
     }
     #canvas-container { position: absolute; inset: 0; touch-action: none; }
     #canvas-container canvas { display: block; width: 100%; height: 100%; }
+    #cabin-fold-labels { position: absolute; inset: 0; pointer-events: none; }
+    .cabin-fold-label {
+      position: absolute;
+      transform: translate(-50%, -100%);
+      max-width: min(180px, 44%);
+      padding: 3px 7px;
+      border: 1px solid #d97706;
+      border-radius: 9px;
+      background: #fffbeb;
+      color: #78350f;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.3;
+      text-align: center;
+    }
     #camera-controls {
       position: absolute;
       bottom: 12px;
@@ -336,6 +351,7 @@
 
 <main id="studio-preview" aria-label="推车三维预览">
   <div id="canvas-container" class="cursor-grab active:cursor-grabbing"></div>
+  <div id="cabin-fold-labels" aria-hidden="true"></div>
   <p id="model-status" class="studio-panel rounded-xl text-xs text-zinc-700" role="status" hidden></p>
   <nav id="camera-controls" class="flex items-center gap-1 studio-panel p-1.5 rounded-full" aria-label="模型视角">
     <button type="button" onclick="setCameraView('iso')" id="cam-iso" class="px-2.5 py-1.5 text-xs font-medium rounded-full transition seg-active">3/4 轴测</button>
@@ -357,6 +373,21 @@
       <button id="posture-4" onclick="setPosture(4)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸车轮</button>
       <button id="posture-5" onclick="setPosture(5)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">拆卸横杆</button>
       <button id="posture-6" onclick="setPosture(6)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">横杆&车轮均拆</button>
+    </div>
+  </section>
+
+  <section id="cabin-fold-states" class="space-y-3" aria-labelledby="cabin-fold-heading" hidden>
+    <h3 id="cabin-fold-heading" class="text-xs font-semibold text-zinc-800">折叠状态</h3>
+    <div class="grid grid-cols-3 gap-1.5">
+      <button type="button" id="cabin-fold-1" onclick="setCabinFoldState(1)" aria-pressed="true" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium card-active">安装完成</button>
+      <button type="button" id="cabin-fold-2" onclick="setCabinFoldState(2)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠中</button>
+      <button type="button" id="cabin-fold-3" onclick="setCabinFoldState(3)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠后站立</button>
+    </div>
+    <div id="cabin-fold-result" class="space-y-2" aria-live="polite" hidden>
+      <h4 id="cabin-fold-result-title" class="text-xs font-semibold text-zinc-800"></h4>
+      <ul id="cabin-fold-result-list" class="space-y-1.5"></ul>
+      <p id="cabin-fold-result-guide" class="text-[11px] leading-relaxed text-zinc-600" hidden></p>
+      <p id="cabin-fold-result-note" class="text-[11px] leading-relaxed text-zinc-600" hidden></p>
     </div>
   </section>
 
@@ -475,6 +506,7 @@ const state = {
   frameWidth: 550,
   wheelSize: 'M',
   postureState: 1,    // 1:安装完成, 2:折叠中, 3:折叠后站立, 4:拆车轮, 5:拆横杆, 6:均拆
+  cabinFoldState: 1,
   cameraView: 'iso',
   d02Facing: 'FF',
   showTray: false,
@@ -637,12 +669,16 @@ function getNoCabinCacheKey() {
   return `no_cabin_w${state.frameWidth}_s${state.postureState}_wheel_${state.wheelSize}`;
 }
 
+function isCabinMode() {
+  return state.cabinMode === 'single' || state.cabinMode === 'double';
+}
+
 function getCabinCacheKey(mode, id) {
-  return `${mode}_${id}_w${state.frameWidth}_s1_wheel_${state.wheelSize}`;
+  return `${mode}_${id}_w${state.frameWidth}_s${state.cabinFoldState}_wheel_${state.wheelSize}`;
 }
 
 function getCabinPaths(mode, id) {
-  return MODEL_MANIFEST.cabinPaths(`${mode}_cabin`, id, state.frameWidth, 1, state.wheelSize);
+  return MODEL_MANIFEST.cabinPaths(`${mode}_cabin`, id, state.frameWidth, state.cabinFoldState, state.wheelSize);
 }
 
 // ============================================================================
@@ -876,11 +912,14 @@ function d02BackToBackLimit(control, index) {
 
 function updateD02StateControls() {
   const showChassis = state.cabinMode === 'none';
-  const showD02 = state.cabinMode === 'double' && state.selectedId === 'D02';
+  const showCabinFold = isCabinMode();
+  const showD02 = state.cabinMode === 'double' && state.selectedId === 'D02' && state.cabinFoldState === 1;
+  const showOperations = showChassis || showCabinFold;
   document.getElementById('chassis-states').hidden = !showChassis;
+  document.getElementById('cabin-fold-states').hidden = !showCabinFold;
   document.getElementById('d02-states').hidden = !showD02;
-  document.getElementById('operation-panel').hidden = !(showChassis || showD02);
-  document.getElementById('studio-workspace').classList.toggle('has-operations', showChassis || showD02);
+  document.getElementById('operation-panel').hidden = !showOperations;
+  document.getElementById('studio-workspace').classList.toggle('has-operations', showOperations);
   if (!showD02) return;
 
   d02FacingRows.forEach(({ row, buttons }, seatIndex) => {
@@ -1240,12 +1279,14 @@ let renderToken = 0;
 
 async function updateScene() {
   const currentToken = ++renderToken;
-  d02FacingFallback = state.cabinMode === 'double' && state.selectedId === 'D02' &&
+  d02FacingFallback = state.cabinMode === 'double' && state.selectedId === 'D02' && state.cabinFoldState === 1 &&
     state.d02Facing !== 'FF' && !getD02FacingPreview(state.d02Facing);
   if (d02FacingFallback) state.d02Facing = 'FF';
   syncConfiguratorRoute();
   d02Loading = true;
   updateD02StateControls();
+  renderCabinFoldResult(null, true);
+  bindCabinFoldLabels(null);
   updateProductHeader();
   setModelStatus('正在加载模型…');
 
@@ -1280,44 +1321,29 @@ async function updateScene() {
       if (model) nextGroup.add(model);
     }
   } else {
-    // 单座舱或双座舱装配
-    if (state.cabinMode === 'single') {
-      const spec = SINGLE_CABINS.find(c => c.id === state.selectedId);
-      if (spec) {
-        const cabinModel = await loadSelected(
-          getCabinCacheKey('single', spec.id),
-          getCabinPaths('single', spec.id)
-        );
-        if (currentToken !== renderToken) return;
-        if (cabinModel) nextGroup.add(cabinModel);
-      }
-    } else if (state.cabinMode === 'double') {
-      const dSpec = DOUBLE_CABINS.find(d => d.id === state.selectedId);
-      if (dSpec) {
-        const cacheKey = getCabinCacheKey('double', dSpec.id);
-        const doubleModel = await loadSelected(
-          cacheKey,
-          getCabinPaths('double', dSpec.id)
-        );
-        if (currentToken !== renderToken) return;
-
-        if (doubleModel) {
-          nextGroup.add(doubleModel);
-          if (dSpec.id === 'D02') {
-            d02Model = doubleModel;
-            d02Animations = cadAssetCache.get(cacheKey)?.animations || [];
-          }
+    const mode = state.cabinMode;
+    const spec = getCabinSpec(mode, state.selectedId);
+    if (spec) {
+      const cacheKey = getCabinCacheKey(mode, spec.id);
+      const cabinModel = await loadSelected(cacheKey, getCabinPaths(mode, spec.id));
+      if (currentToken !== renderToken) return;
+      if (cabinModel) {
+        nextGroup.add(cabinModel);
+        if (spec.id === 'D02' && state.cabinFoldState === 1) {
+          d02Model = cabinModel;
+          d02Animations = cadAssetCache.get(cacheKey)?.animations || [];
         }
       }
     }
-
   }
 
   prepareD02FacingModel(d02Model, d02Animations);
-  const cabinPreview = (state.cabinMode === 'single' || state.cabinMode === 'double') && nextGroup.children[0];
+  const cabinPreview = isCabinMode() ? nextGroup.children[0] : null;
   updateProductHeader(cabinPreview);
   bindD02PoseModel(d02Model, d02Animations);
+  renderCabinFoldResult(cabinPreview?.userData?.strollerFold);
   replaceStrollerRoot(nextGroup);
+  bindCabinFoldLabels(cabinPreview);
   const hasModel = nextGroup.children.length > 0;
   const missingAsset = assetKeys.some(key => cadAssetCache.get(key)?.status !== 'loaded');
   const loadError = assetKeys.some(key => cadAssetCache.get(key)?.status === 'error');
@@ -1354,6 +1380,10 @@ function fitPreview() {
   const distance = isPart
     ? Math.max(45, radius * 1.15 / Math.sin(fitAngle))
     : Math.max(1800, Math.max(size.y, width / camera.aspect) * 0.68 / tangent);
+  const isFolding = isCabinMode() && state.cabinFoldState !== 1;
+  // Keep the parked seats and the contact rings legible in the same view.
+  scene.fog.near = isFolding ? Math.max(6000, distance + 2 * radius) : 3200;
+  scene.fog.far = isFolding ? scene.fog.near + 3500 : 7500;
   controls.target.copy(sceneFocus);
   camera.position.copy(sceneFocus).addScaledVector(direction, distance);
   controls.minDistance = isPart ? Math.max(15, radius * 0.65) : 500;
@@ -1548,6 +1578,109 @@ function setWheelSize(size, skipSceneUpdate = false) {
 }
 
 const CHASSIS_POSTURES = ['安装完成', '折叠中', '折叠后站立', '拆卸车轮', '拆卸横杆', '横杆与车轮均拆'];
+const CABIN_FOLD_STATES = [1, 2, 3];
+const foldLabelProjection = new THREE.Vector3();
+let foldLabelModel = null;
+let foldLabels = [];
+
+function setCabinFoldState(foldState) {
+  if (!isCabinMode() || !CABIN_FOLD_STATES.includes(foldState) || state.cabinFoldState === foldState) return;
+  state.cabinFoldState = foldState;
+  updateScene();
+}
+
+function renderCabinFoldResult(result, loading = false) {
+  if (!isCabinMode()) return;
+  for (const foldState of CABIN_FOLD_STATES) {
+    const button = document.getElementById(`cabin-fold-${foldState}`);
+    const selected = state.cabinFoldState === foldState;
+    button.classList.toggle('card-active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  const panel = document.getElementById('cabin-fold-result');
+  panel.hidden = state.cabinFoldState === 1;
+  if (panel.hidden) return;
+
+  const title = document.getElementById('cabin-fold-result-title');
+  const list = document.getElementById('cabin-fold-result-list');
+  const guide = document.getElementById('cabin-fold-result-guide');
+  const note = document.getElementById('cabin-fold-result-note');
+  list.innerHTML = '';
+  guide.hidden = true;
+  note.hidden = true;
+  const removed = result?.removed || [];
+  const retained = result?.retained || [];
+  if (!removed.length && !retained.length) {
+    title.textContent = loading ? '正在载入折叠检查结果…' : '当前模型暂无折叠检查记录。';
+    return;
+  }
+
+  title.textContent = removed.length ? `折叠前先拆下 ${removed.length} 个座舱` : '座舱可随车收折';
+  for (const [seats, detach] of [[removed, true], [retained, false]]) {
+    for (const seat of seats) {
+      const item = document.createElement('li');
+      item.className = 'space-y-1 p-2 rounded-lg border border-zinc-200/80 bg-white/70';
+      const label = document.createElement('div');
+      label.className = 'flex flex-wrap items-baseline gap-x-2 gap-y-0.5';
+      const name = document.createElement('span');
+      name.className = 'text-[11px] font-semibold text-zinc-800';
+      name.textContent = seat.name;
+      const disposition = document.createElement('span');
+      disposition.className = detach ? 'text-[11px] font-medium text-amber-800' : 'text-[11px] font-medium text-emerald-800';
+      disposition.textContent = detach ? '先拆下' : '随车收折';
+      label.appendChild(name);
+      label.appendChild(disposition);
+      item.appendChild(label);
+      if (seat.reason) {
+        const reason = document.createElement('p');
+        reason.className = 'text-[11px] leading-relaxed text-zinc-600';
+        reason.textContent = seat.reason;
+        item.appendChild(reason);
+      }
+      list.appendChild(item);
+    }
+  }
+  if (removed.length) {
+    const hasMarker = result.hasMarker ?? removed.some(seat => seat.zone);
+    guide.textContent = hasMarker
+      ? '橙色标记指示干涉位置。拆下的座舱单独摆在车架旁。'
+      : '拆下的座舱单独摆在车架旁。';
+    guide.hidden = false;
+  }
+  note.textContent = result.note || '';
+  note.hidden = !note.textContent;
+}
+
+function bindCabinFoldLabels(model) {
+  const layer = document.getElementById('cabin-fold-labels');
+  layer.innerHTML = '';
+  foldLabels = [];
+  foldLabelModel = model;
+  if (!model || state.cabinFoldState === 1) return;
+  for (const seat of model.userData?.strollerFold?.removed || []) {
+    const position = seat.position;
+    if (!Array.isArray(position) || position.length !== 3 || !position.every(Number.isFinite)) continue;
+    const label = document.createElement('span');
+    label.className = 'cabin-fold-label';
+    label.textContent = seat.name;
+    label.hidden = true;
+    layer.appendChild(label);
+    foldLabels.push({ label, position: new THREE.Vector3(...position) });
+  }
+}
+
+function updateCabinFoldLabels() {
+  if (!foldLabels.length) return;
+  const { clientWidth: width, clientHeight: height } = container;
+  camera.updateMatrixWorld();
+  for (const { label, position } of foldLabels) {
+    const { x, y, z } = foldLabelProjection.copy(position).applyMatrix4(foldLabelModel.matrixWorld).project(camera);
+    label.hidden = !width || !height || ![x, y, z].every(value => Math.abs(value) <= 1);
+    if (label.hidden) continue;
+    label.style.left = `${(x + 1) * width / 2}px`;
+    label.style.top = `${(1 - y) * height / 2}px`;
+  }
+}
 
 function setPosture(stateNum, skipSceneUpdate = false) {
   state.postureState = stateNum;
@@ -1563,6 +1696,7 @@ function updateProductHeader(cabinPreview = null) {
   const { cabinMode, frameWidth, wheelSize, postureState, selectedId } = state;
   const isChassis = cabinMode === 'none';
   const isParts = cabinMode === 'other';
+  const isFoldedCabin = isCabinMode() && state.cabinFoldState !== 1;
   const isDouble = cabinMode === 'double';
   const spec = (isDouble ? DOUBLE_CABINS : SINGLE_CABINS).find(item => item.id === selectedId);
   const wheelSpec = WHEEL_SPECS[wheelSize];
@@ -1593,7 +1727,8 @@ function updateProductHeader(cabinPreview = null) {
       ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。座舱为概念设计。'
       : '中档通过座舱两侧的一体式卡座直接连接车架。座舱为概念设计。';
   }
-  if (cabinPreview) {
+  if (isFoldedCabin) posture = CHASSIS_POSTURES[state.cabinFoldState - 1];
+  if (cabinPreview && !isFoldedCabin) {
     const modelSize = new THREE.Box3().setFromObject(cabinPreview).getSize(new THREE.Vector3());
     totalWidth = `约 ${Math.round(modelSize.z)} mm`;
   }
@@ -1605,14 +1740,14 @@ function updateProductHeader(cabinPreview = null) {
   document.getElementById('spec-frame-width').textContent = `${frameWidth} mm · ${widthName}`;
   document.getElementById('spec-total-width').textContent = totalWidth;
   document.getElementById('spec-wheelset').textContent = wheelSpec.name;
-  document.getElementById('spec-posture-label').textContent = isParts ? '类型' : isChassis ? '姿态' : '接口';
+  document.getElementById('spec-posture-label').textContent = isParts ? '类型' : (isChassis || isFoldedCabin) ? '姿态' : '接口';
   document.getElementById('spec-posture').textContent = posture || '';
   document.getElementById('spec-children').textContent = `${children} 个`;
   document.getElementById('frame-width-info').hidden = isParts;
-  document.getElementById('total-width-info').hidden = isParts;
+  document.getElementById('total-width-info').hidden = isParts || isFoldedCabin;
   document.getElementById('wheel-info').hidden = isParts;
   document.getElementById('posture-info').hidden = !posture;
-  document.getElementById('child-capacity-info').hidden = !children;
+  document.getElementById('child-capacity-info').hidden = !children || (isCabinMode() && state.cabinFoldState !== 1);
   const descriptionEl = document.getElementById('spec-desc');
   descriptionEl.textContent = description;
   descriptionEl.hidden = !description;
@@ -1658,7 +1793,7 @@ resizePreview();
 // ============================================================================
 // 6. Configurator route: use the address as the source for a page refresh.
 // ============================================================================
-const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'type', 'part', 'view', 'facing', 'front', 'rear', 'd02'];
+const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'fold', 'type', 'part', 'view', 'facing', 'front', 'rear', 'd02'];
 
 function d02PoseRouteValues(component) {
   if (component.key === 'backrest') return D02_BACKREST_ANGLES;
@@ -1703,6 +1838,7 @@ function syncConfiguratorRoute() {
     query.set('width', String(state.frameWidth));
     query.set('wheel', state.wheelSize);
     if (state.cabinMode === 'none' || state.postureState !== 1) query.set('state', String(state.postureState));
+    if (isCabinMode() && state.cabinFoldState !== 1) query.set('fold', String(state.cabinFoldState));
   }
   query.set('view', state.cameraView);
   if (state.cabinMode === 'double' && state.selectedId === 'D02') {
@@ -1744,6 +1880,10 @@ function restoreConfiguratorRoute() {
   const posture = query.get('state') || '';
   state.cabinMode = mode;
   state.selectedId = cabin?.id || 'S05';
+  if (isCabinMode()) {
+    const fold = Number(query.get('fold'));
+    state.cabinFoldState = CABIN_FOLD_STATES.includes(fold) ? fold : 1;
+  }
   setFrameWidth(cabin && !cabin.widths.includes(width) ? cabin.widths[0] : width, true);
   setWheelSize(WHEEL_SIZES.includes(wheel) ? wheel : (presetWheel || 'M'), true);
   setPosture(/^[1-6]$/.test(posture) ? Number(posture) : 1, true);
@@ -1766,6 +1906,7 @@ function animate(now = performance.now()) {
   requestAnimationFrame(animate);
   animateD02Poses(now);
   controls.update();
+  updateCabinFoldLabels();
   shadowPlane.visible = camera.position.y > 0;
   ringMesh.visible = state.cabinMode !== 'other' && camera.position.y > ringMesh.position.y;
   renderer.render(scene, camera);
