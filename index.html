@@ -381,7 +381,19 @@
     <div class="grid grid-cols-3 gap-1.5">
       <button type="button" id="cabin-fold-1" onclick="setCabinFoldState(1)" aria-pressed="true" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium card-active">安装完成</button>
       <button type="button" id="cabin-fold-2" onclick="setCabinFoldState(2)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠中</button>
-      <button type="button" id="cabin-fold-3" onclick="setCabinFoldState(3)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠后站立</button>
+      <button type="button" id="cabin-fold-3" onclick="setCabinFoldState(3)" aria-pressed="false" class="card-btn py-2 px-1 rounded-xl text-[11px] font-medium">折叠后</button>
+    </div>
+    <div id="cabin-fold-player" class="space-y-2" hidden>
+      <div class="flex items-center justify-between gap-2">
+        <label for="cabin-fold-progress" class="text-[11px] font-semibold text-zinc-700">折叠进度</label>
+        <span id="cabin-fold-percent" class="text-[11px] tabular-nums text-zinc-600" aria-hidden="true">50%</span>
+      </div>
+      <input id="cabin-fold-progress" class="studio-slider" type="range" min="0" max="1" step="0.01" value="0.5" />
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[11px] text-zinc-600">展开</span>
+        <button id="cabin-fold-play" type="button" aria-pressed="false" class="card-btn px-2.5 py-1 rounded-lg text-[11px] font-medium">播放完整折叠</button>
+        <span class="text-[11px] text-zinc-600">收折</span>
+      </div>
     </div>
     <div id="cabin-fold-result" class="space-y-2" aria-live="polite" hidden>
       <h4 id="cabin-fold-result-title" class="text-xs font-semibold text-zinc-800"></h4>
@@ -507,6 +519,7 @@ const state = {
   wheelSize: 'M',
   postureState: 1,    // 1:安装完成, 2:折叠中, 3:折叠后站立, 4:拆车轮, 5:拆横杆, 6:均拆
   cabinFoldState: 1,
+  cabinFoldProgress: null,
   cameraView: 'iso',
   d02Facing: 'FF',
   showTray: false,
@@ -1286,6 +1299,7 @@ async function updateScene() {
   d02Loading = true;
   updateD02StateControls();
   renderCabinFoldResult(null, true);
+  bindCabinFoldAnimation(null);
   bindCabinFoldLabels(null);
   updateProductHeader();
   setModelStatus('正在加载模型…');
@@ -1299,6 +1313,7 @@ async function updateScene() {
   const nextGroup = new THREE.Group();
   let d02Model = null;
   let d02Animations = [];
+  let cabinFoldAnimations = [];
 
   // 1) 纯车架模式 (no_cabin) 或 带座舱模式
   if (state.cabinMode === 'none') {
@@ -1333,6 +1348,7 @@ async function updateScene() {
           d02Model = cabinModel;
           d02Animations = cadAssetCache.get(cacheKey)?.animations || [];
         }
+        if (state.cabinFoldState === 2) cabinFoldAnimations = cadAssetCache.get(cacheKey)?.animations || [];
       }
     }
   }
@@ -1342,7 +1358,8 @@ async function updateScene() {
   updateProductHeader(cabinPreview);
   bindD02PoseModel(d02Model, d02Animations);
   renderCabinFoldResult(cabinPreview?.userData?.strollerFold);
-  replaceStrollerRoot(nextGroup);
+  const foldBounds = bindCabinFoldAnimation(cabinPreview, cabinFoldAnimations);
+  replaceStrollerRoot(nextGroup, foldBounds);
   bindCabinFoldLabels(cabinPreview);
   const hasModel = nextGroup.children.length > 0;
   const missingAsset = assetKeys.some(key => cadAssetCache.get(key)?.status !== 'loaded');
@@ -1354,13 +1371,13 @@ async function updateScene() {
   }
 }
 
-function replaceStrollerRoot(newGroup) {
+function replaceStrollerRoot(newGroup, bounds = null) {
   while (strollerRoot.children.length > 0) {
     strollerRoot.remove(strollerRoot.children[0]);
   }
   strollerRoot.add(newGroup);
 
-  sceneBounds = new THREE.Box3().setFromObject(strollerRoot);
+  sceneBounds = bounds || new THREE.Box3().setFromObject(strollerRoot);
   fitPreview();
 }
 
@@ -1579,14 +1596,131 @@ function setWheelSize(size, skipSceneUpdate = false) {
 
 const CHASSIS_POSTURES = ['安装完成', '折叠中', '折叠后站立', '拆卸车轮', '拆卸横杆', '横杆与车轮均拆'];
 const CABIN_FOLD_STATES = [1, 2, 3];
+const CABIN_FOLD_PLAYBACK_MS = 5000;
 const foldLabelProjection = new THREE.Vector3();
+let cabinFoldMixer = null;
+let cabinFoldAction = null;
+let cabinFoldPlayback = null;
+let cabinFoldRouteTimer = null;
 let foldLabelModel = null;
 let foldLabels = [];
 
 function setCabinFoldState(foldState) {
   if (!isCabinMode() || !CABIN_FOLD_STATES.includes(foldState) || state.cabinFoldState === foldState) return;
   state.cabinFoldState = foldState;
+  state.cabinFoldProgress = null;
   updateScene();
+}
+
+function sampleCabinFold(progress) {
+  cabinFoldAction.time = progress * cabinFoldAction.getClip().duration;
+  cabinFoldMixer.update(0);
+}
+
+function showCabinFoldProgress(progress) {
+  sampleCabinFold(progress);
+  const percent = Math.round(progress * 100);
+  const slider = document.getElementById('cabin-fold-progress');
+  slider.value = String(percent / 100);
+  slider.setAttribute('aria-valuetext', `${percent}%`);
+  document.getElementById('cabin-fold-percent').textContent = `${percent}%`;
+}
+
+function updateCabinFoldPlayButton() {
+  const button = document.getElementById('cabin-fold-play');
+  button.setAttribute('aria-pressed', String(Boolean(cabinFoldPlayback)));
+  if (cabinFoldPlayback) button.textContent = '暂停';
+  else if (state.cabinFoldProgress === null || state.cabinFoldProgress >= 1) button.textContent = '播放完整折叠';
+  else button.textContent = '播放折叠';
+}
+
+function bindCabinFoldAnimation(model, animations = []) {
+  if (cabinFoldMixer) {
+    cabinFoldMixer.stopAllAction();
+    cabinFoldMixer.uncacheRoot(cabinFoldMixer.getRoot());
+  }
+  if (cabinFoldRouteTimer !== null) clearTimeout(cabinFoldRouteTimer);
+  cabinFoldRouteTimer = null;
+  cabinFoldMixer = null;
+  cabinFoldAction = null;
+  cabinFoldPlayback = null;
+
+  const player = document.getElementById('cabin-fold-player');
+  player.hidden = true;
+  if (!model || state.cabinFoldState !== 2) return null;
+  const clip = animations.find(animation => animation.name === 'STROLLER_FOLD');
+  if (!Number.isFinite(clip?.duration) || clip.duration <= 0) {
+    if (state.cabinFoldProgress !== null) {
+      state.cabinFoldProgress = null;
+      syncConfiguratorRoute();
+    }
+    return null;
+  }
+
+  cabinFoldMixer = new THREE.AnimationMixer(model);
+  cabinFoldAction = cabinFoldMixer.clipAction(clip);
+  cabinFoldAction.paused = true;
+  cabinFoldAction.play();
+
+  // Fit the view once for the sweep so scrubbing does not move the camera.
+  const bounds = new THREE.Box3();
+  const sampleBounds = new THREE.Box3();
+  for (let step = 0; step <= 8; step++) {
+    sampleCabinFold(step / 8);
+    bounds.union(sampleBounds.setFromObject(model));
+  }
+  const authoredProgress = model.userData?.strollerFold?.initialProgress;
+  const startingProgress = Number.isFinite(authoredProgress) ? Math.min(1, Math.max(0, authoredProgress)) : 0.5;
+  showCabinFoldProgress(state.cabinFoldProgress ?? startingProgress);
+  updateCabinFoldPlayButton();
+  player.hidden = false;
+  return bounds;
+}
+
+function advanceCabinFoldPlayback(now) {
+  if (!cabinFoldPlayback) return;
+  const { start, from } = cabinFoldPlayback;
+  const progress = Math.min(1, from + Math.max(0, now - start) / CABIN_FOLD_PLAYBACK_MS);
+  state.cabinFoldProgress = progress;
+  showCabinFoldProgress(progress);
+  if (progress === 1) {
+    cabinFoldPlayback = null;
+    updateCabinFoldPlayButton();
+    syncConfiguratorRoute();
+  }
+}
+
+function buildCabinFoldPlayer() {
+  const slider = document.getElementById('cabin-fold-progress');
+  slider.addEventListener('input', () => {
+    if (!cabinFoldAction) return;
+    cabinFoldPlayback = null;
+    state.cabinFoldProgress = Number(slider.value);
+    showCabinFoldProgress(state.cabinFoldProgress);
+    updateCabinFoldPlayButton();
+  });
+  slider.addEventListener('change', () => {
+    if (!cabinFoldAction) return;
+    if (cabinFoldRouteTimer !== null) clearTimeout(cabinFoldRouteTimer);
+    cabinFoldRouteTimer = setTimeout(() => {
+      cabinFoldRouteTimer = null;
+      syncConfiguratorRoute();
+    }, 120);
+  });
+  document.getElementById('cabin-fold-play').addEventListener('click', () => {
+    if (!cabinFoldAction) return;
+    if (cabinFoldPlayback) {
+      cabinFoldPlayback = null;
+      syncConfiguratorRoute();
+    } else {
+      const progress = state.cabinFoldProgress;
+      const from = progress === null || progress >= 1 ? 0 : progress;
+      state.cabinFoldProgress = from;
+      showCabinFoldProgress(from);
+      cabinFoldPlayback = { start: performance.now(), from };
+    }
+    updateCabinFoldPlayButton();
+  });
 }
 
 function renderCabinFoldResult(result, loading = false) {
@@ -1727,7 +1861,7 @@ function updateProductHeader(cabinPreview = null) {
       ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。座舱为概念设计。'
       : '中档通过座舱两侧的一体式卡座直接连接车架。座舱为概念设计。';
   }
-  if (isFoldedCabin) posture = CHASSIS_POSTURES[state.cabinFoldState - 1];
+  if (isFoldedCabin) posture = state.cabinFoldState === 3 ? '折叠后' : '折叠中';
   if (cabinPreview && !isFoldedCabin) {
     const modelSize = new THREE.Box3().setFromObject(cabinPreview).getSize(new THREE.Vector3());
     totalWidth = `约 ${Math.round(modelSize.z)} mm`;
@@ -1793,7 +1927,7 @@ resizePreview();
 // ============================================================================
 // 6. Configurator route: use the address as the source for a page refresh.
 // ============================================================================
-const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'fold', 'type', 'part', 'view', 'facing', 'front', 'rear', 'd02'];
+const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'fold', 'progress', 'type', 'part', 'view', 'facing', 'front', 'rear', 'd02'];
 
 function d02PoseRouteValues(component) {
   if (component.key === 'backrest') return D02_BACKREST_ANGLES;
@@ -1839,6 +1973,9 @@ function syncConfiguratorRoute() {
     query.set('wheel', state.wheelSize);
     if (state.cabinMode === 'none' || state.postureState !== 1) query.set('state', String(state.postureState));
     if (isCabinMode() && state.cabinFoldState !== 1) query.set('fold', String(state.cabinFoldState));
+    if (isCabinMode() && state.cabinFoldState === 2 && state.cabinFoldProgress !== null) {
+      query.set('progress', String(Math.round(state.cabinFoldProgress * 100) / 100));
+    }
   }
   query.set('view', state.cameraView);
   if (state.cabinMode === 'double' && state.selectedId === 'D02') {
@@ -1883,6 +2020,8 @@ function restoreConfiguratorRoute() {
   if (isCabinMode()) {
     const fold = Number(query.get('fold'));
     state.cabinFoldState = CABIN_FOLD_STATES.includes(fold) ? fold : 1;
+    const progress = Number(query.get('progress') ?? NaN);
+    state.cabinFoldProgress = state.cabinFoldState === 2 && progress >= 0 && progress <= 1 ? progress : null;
   }
   setFrameWidth(cabin && !cabin.widths.includes(width) ? cabin.widths[0] : width, true);
   setWheelSize(WHEEL_SIZES.includes(wheel) ? wheel : (presetWheel || 'M'), true);
@@ -1898,6 +2037,7 @@ function restoreConfiguratorRoute() {
 }
 
 buildD02StateControls();
+buildCabinFoldPlayer();
 buildPartControls();
 window.addEventListener('popstate', restoreConfiguratorRoute);
 restoreConfiguratorRoute();
@@ -1905,6 +2045,7 @@ restoreConfiguratorRoute();
 function animate(now = performance.now()) {
   requestAnimationFrame(animate);
   animateD02Poses(now);
+  advanceCabinFoldPlayback(now);
   controls.update();
   updateCabinFoldLabels();
   shadowPlane.visible = camera.position.y > 0;

@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cache
 import math
+import struct
 
 from catalog_frame import prepare_catalog_frame
 from create_d02_double_seat import (
-    AXIS_Z, D02_RISE, FRONT_PORT_ADVANCE, FRONT_PORT_DROP, HIGH_PORT_RISE, HIGH_PORT_SETBACK, rotation,
+    AXIS_Z, D02_RISE, FRONT_PORT_ADVANCE, FRONT_PORT_DROP, Geometry, HIGH_PORT_RISE, HIGH_PORT_SETBACK,
+    accessor, cross, rotation, sub,
 )
 from d02_front_mount import relocate_front_ports, relocate_high_ports
 from generate_wheel_variants import DEFAULT_WHEEL, MODEL_DIR, compact_active_scene, read_glb
@@ -32,6 +34,113 @@ def _interpolate(a, b, t):
 
 def _code(node):
     return node["name"].split(".", 1)[0]
+
+
+def _leg_triangle_indices(doc, binary, primitive, count):
+    if "indices" not in primitive:
+        return range(count)
+    field = doc["accessors"][primitive["indices"]]
+    view = doc["bufferViews"][field["bufferView"]]
+    code = {5121: "B", 5123: "H", 5125: "I"}[field["componentType"]]
+    offset = view.get("byteOffset", 0) + field.get("byteOffset", 0)
+    return struct.unpack_from(f"<{field['count']}{code}", binary, offset)
+
+
+def _clip_leg_face(polygon, progress, plane, side):
+    section = []
+    previous = polygon[-1]
+    distance = progress(previous) - plane
+    for vertex in polygon:
+        next_distance = progress(vertex) - plane
+        if (distance*side >= 0) != (next_distance*side >= 0):
+            scale = distance/(distance-next_distance)
+            section.append(tuple(_interpolate(a, b, scale) for a, b in zip(previous, vertex)))
+        if next_distance*side >= 0:
+            section.append(vertex)
+        previous, distance = vertex, next_distance
+    return section
+
+
+def _rear_leg_relief(points, indices):
+    """Flatten the wheel-side wall at the lower pivot, then blend into the tube."""
+    mean_x, mean_y, mean_z = _mean(points)
+    xx = sum((x-mean_x)**2 for x, _, _ in points)
+    yy = sum((y-mean_y)**2 for _, y, _ in points)
+    xy = sum((x-mean_x)*(y-mean_y) for x, y, _ in points)
+    angle = .5*math.atan2(2*xy, xx-yy)
+    ax, ay = math.cos(angle), math.sin(angle)
+    if ay < 0:
+        ax, ay = -ax, -ay
+    along = [x*ax+y*ay for x, y, _ in points]
+    lower, upper = min(along), max(along)
+    side = math.copysign(1, mean_z)
+    inner = min(side*p[2] for p in points)
+    depth = .006
+    ends = (.12, .145, .17, .195, .22, .25)
+
+    def progress(point):
+        return (point[0]*ax+point[1]*ay-lower)/(upper-lower)
+
+    def trimmed(point):
+        x, y, z = point
+        u = min(1., max(0., (progress(point)-ends[0])/(ends[-1]-ends[0])))
+        limit = inner + depth*(1.-u*u*(3.-2.*u))
+        return x, y, side*max(side*z, limit)
+
+    shape = Geometry()
+
+    def add_face(a, b, c):
+        if math.hypot(*cross(sub(b, a), sub(c, a))) > 1e-11:
+            shape.triangle(a, b, c)
+
+    for i in range(0, len(indices), 3):
+        face = [points[index] for index in indices[i:i+3]]
+        if min(side*p[2] for p in face) >= inner+depth or min(map(progress, face)) >= ends[-1]:
+            add_face(*face)
+            continue
+        sections = []
+        for plane in ends:
+            if min(map(progress, face)) < plane-1e-7 and max(map(progress, face)) > plane+1e-7:
+                sections.append(_clip_leg_face(face, progress, plane, -1.))
+                face = _clip_leg_face(face, progress, plane, 1.)
+        sections.append(face)
+        for section in sections:
+            a, *edges = [trimmed(p) for p in section]
+            for b, c in zip(edges, edges[1:]):
+                add_face(a, b, c)
+    return shape
+
+
+def relieve_rear_legs(doc, binary):
+    """Add the large-wheel relief to the two V46 rear tubes before animating them.
+
+    Accepts the published frame's raw TRS or already baked assembly coordinates.
+    Each pin axis and upper attachment stay where they were. Only the inboard
+    wall of the lower tube is reshaped, ahead of the transverse saddle.
+    """
+    legs = [i for i, node in enumerate(doc["nodes"]) if _code(node) in ("V46_rear_leg_1", "V46_rear_leg_-1")]
+    if len(legs) != 2:
+        raise ValueError("The folding chassis needs both V46 rear tubes")
+    animated = {c["target"].get("node") for a in doc.get("animations", ()) for c in a["channels"]}
+    for i in legs:
+        if i in animated:
+            raise ValueError("Apply rear tube relief before exporting its folding animation")
+        node = doc["nodes"][i]
+        source = doc["meshes"][node["mesh"]]
+        primitive, = source["primitives"]
+        points = _points(doc, binary, node)
+        indices = _leg_triangle_indices(doc, binary, primitive, len(points))
+        shape = _rear_leg_relief(points, indices)
+        updated = {**primitive, "attributes": {
+            "POSITION": accessor(doc, binary, shape.vertices, "VEC3", vertex=True, bounds=True),
+            "NORMAL": accessor(doc, binary, shape.normals, "VEC3", vertex=True),
+        }}
+        updated.pop("indices", None)
+        for field in ("matrix", "translation", "rotation", "scale"):
+            node.pop(field, None)
+        node["mesh"] = len(doc["meshes"])
+        doc["meshes"].append({**source, "primitives": [updated]})
+    doc["buffers"][0]["byteLength"] = len(binary)
 
 
 def _native(width, wheel, state):
@@ -78,7 +187,7 @@ def prepare_fold_frame(width, wheel, state, ports=()):
         raise ValueError(f"Not a folding posture: {state}")
 
     rest, rest_bin = _native(width, wheel, 1)
-    doc, binary = _native(width, wheel, state)
+    doc, binary = _native(width, wheel, int(state))
     hinges = _hosts(doc)
     reference = _hosts(rest)
     angles = {
@@ -180,10 +289,10 @@ def _attachment_link(name):
     return None
 
 
-def _sample_pose(opening, motion, phase, height):
+def _sample_pose(opening, motion, phase, height, *, ground_inline=False):
     doc, binary, installed = opening
     pivots, frames, tracks = motion
-    first = int(phase)-1
+    first = min(int(phase)-1, len(frames)-2)
     t = phase-(first+1)
     angles = tuple(_interpolate(a, b, t) for a, b in zip(frames[first], frames[first+1]))
     transforms = _transforms(pivots, angles)
@@ -213,12 +322,25 @@ def _sample_pose(opening, motion, phase, height):
     # same offset is applied to both chassis and all receiver datums.
     sample = {**doc, "nodes": nodes, "scenes": [dict(scene) for scene in doc["scenes"]]}
     ground = _height(sample, binary)
-    _ground(sample, ground)
+    if ground_inline:
+        for node in nodes:
+            node["translation"][1] -= ground
+    else:
+        _ground(sample, ground)
     datums = {}
     for station, datum in installed.items():
         x, y, z = _map_xy(unlevel(datum.center), transforms[2 if station == "L" else 3])
         datums[station] = FoldDatum((x, y-ground, z), angles[2 if station == "L" else 3])
     return sample, binary, datums
+
+
+def _opening(width, wheel, ports):
+    opening = prepare_fold_frame(width, wheel, 1, ports)
+    rest, rest_bin = _native(width, wheel, 1)
+    native_l = _center(_points(rest, rest_bin, _hosts(rest)["L", 1]))
+    dx, dy = (-FRONT_PORT_ADVANCE, -FRONT_PORT_DROP) if width != 380 and tuple(ports) == ("L", "H") else (0, 0)
+    _, expected_y = _rot(native_l[0]+dx, native_l[1]+dy, opening[2]["L"].angle)
+    return opening, expected_y-opening[2]["L"].center[1]
 
 
 def prepare_fold_samples(width, wheel, ports=(), *, steps=8):
@@ -229,12 +351,7 @@ def prepare_fold_samples(width, wheel, ports=(), *, steps=8):
     """
     if steps < 1:
         raise ValueError("Each folding stage needs at least one sample")
-    opening = prepare_fold_frame(width, wheel, 1, ports)
-    rest, rest_bin = _native(width, wheel, 1)
-    native_l = _center(_points(rest, rest_bin, _hosts(rest)["L", 1]))
-    dx, dy = (-FRONT_PORT_ADVANCE, -FRONT_PORT_DROP) if width != 380 and tuple(ports) == ("L", "H") else (0, 0)
-    _, expected_y = _rot(native_l[0]+dx, native_l[1]+dy, opening[2]["L"].angle)
-    height = expected_y-opening[2]["L"].center[1]
+    opening, height = _opening(width, wheel, ports)
     motion = _motion(width)
     result = [(1.0, *opening)]
     for first in (1, 2):
@@ -242,4 +359,26 @@ def prepare_fold_samples(width, wheel, ports=(), *, steps=8):
             phase = first+i/steps
             result.append((phase, *_sample_pose(opening, motion, phase, height)))
         result.append((float(first+1), *prepare_fold_frame(width, wheel, first+1, ports)))
+    return result
+
+
+def prepare_continuous_fold(width, wheel, ports=(), *, steps=32, end_phase=3.0):
+    """Sample both fold segments on one opening mesh for rigid glTF animation.
+
+    All phases share the opening mesh buffers and node indices. The returned
+    phases are evenly spaced from 1 to the selected mechanical stop, with the
+    opening wheel and fork geometry carried through the entire motion.
+    """
+    if steps < 1:
+        raise ValueError("Each folding stage needs at least one sample")
+    if not 1.0 < end_phase <= 3.0:
+        raise ValueError("The folding stop must follow the open pose and stay within the linkage path")
+    opening, height = _opening(width, wheel, ports)
+    if wheel == "L" and end_phase > 2.45:
+        relieve_rear_legs(opening[0], opening[1])
+    motion = _motion(width)
+    result = [(1.0, *opening)]
+    for i in range(1, 2*steps+1):
+        phase = end_phase if i == 2*steps else _interpolate(1., end_phase, i/(2*steps))
+        result.append((phase, *_sample_pose(opening, motion, phase, height, ground_inline=True)))
     return result
