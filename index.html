@@ -626,16 +626,11 @@ function getNoCabinCacheKey() {
 }
 
 function getCabinCacheKey(mode, id) {
-  return `${mode}_${id}_w${state.frameWidth}_s${getCabinPosture(id)}_wheel_${state.wheelSize}`;
-}
-
-function getCabinPosture(id) {
-  // D02 is available as an assembled model on both widths and all wheelsets.
-  return id === 'D02' ? 1 : state.postureState;
+  return `${mode}_${id}_w${state.frameWidth}_s1_wheel_${state.wheelSize}`;
 }
 
 function getCabinPaths(mode, id) {
-  return MODEL_MANIFEST.cabinPaths(`${mode}_cabin`, id, state.frameWidth, getCabinPosture(id), state.wheelSize);
+  return MODEL_MANIFEST.cabinPaths(`${mode}_cabin`, id, state.frameWidth, 1, state.wheelSize);
 }
 
 // ============================================================================
@@ -1322,7 +1317,8 @@ async function updateScene() {
   }
 
   prepareD02FacingModel(d02Model, d02Animations);
-  updateProductHeader(d02Model);
+  const cabinPreview = (state.cabinMode === 'single' || state.cabinMode === 'double') && nextGroup.children[0];
+  updateProductHeader(cabinPreview);
   bindD02PoseModel(d02Model, d02Animations);
   replaceStrollerRoot(nextGroup);
   const hasModel = nextGroup.children.length > 0;
@@ -1493,7 +1489,7 @@ function setPosture(stateNum, skipSceneUpdate = false) {
   if (!skipSceneUpdate) updateScene();
 }
 
-function updateProductHeader(d02Model = null) {
+function updateProductHeader(cabinPreview = null) {
   const { cabinMode, frameWidth, wheelSize, postureState, selectedId } = state;
   const isChassis = cabinMode === 'none';
   const isParts = cabinMode === 'other';
@@ -1525,10 +1521,10 @@ function updateProductHeader(d02Model = null) {
     description = frameWidth === 650
       ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。座舱为概念设计。'
       : '中档通过座舱两侧的一体式卡座直接连接车架。座舱为概念设计。';
-    if (d02Model) {
-      const modelSize = new THREE.Box3().setFromObject(d02Model).getSize(new THREE.Vector3());
-      totalWidth = `约 ${Math.round(modelSize.z)} mm`;
-    }
+  }
+  if (cabinPreview) {
+    const modelSize = new THREE.Box3().setFromObject(cabinPreview).getSize(new THREE.Vector3());
+    totalWidth = `约 ${Math.round(modelSize.z)} mm`;
   }
 
   document.getElementById('spec-title').textContent = title || '模块化推车';
@@ -1557,7 +1553,7 @@ function setCameraView(view, skipRouteUpdate = false) {
   });
   const distance = camera.position.distanceTo(controls.target) || 2600;
   const direction = new THREE.Vector3();
-  const frontAlongNegativeX = state.cabinMode === 'none' || (state.cabinMode === 'double' && state.selectedId === 'D02');
+  const frontAlongNegativeX = state.cabinMode !== 'other';
   if (view === 'iso') direction.set(-1550, 560, 1650).normalize();
   if (view === 'side') direction.set(frontAlongNegativeX ? 0 : 1, 0, frontAlongNegativeX ? 1 : 0);
   if (view === 'front') direction.set(frontAlongNegativeX ? -1 : 0, 0, frontAlongNegativeX ? 0 : 1);
