@@ -10,8 +10,9 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- Three.js 核心与 GLTF 加载器 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="./orbit-controls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="./models/other/catalog.js"></script>
   <!-- OpenCascade WebAssembly 内核：用于直接解析 GitHub 仓库中的 .step / .stp 文件 -->
   <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.22/dist/occt-import-js.js"></script>
   <style>
@@ -117,6 +118,12 @@
     }
     #configuration-panel { grid-area: configuration; }
     #operation-panel { grid-area: operations; }
+    #part-list {
+      max-height: min(54dvh, 560px);
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      padding: 1px 7px 8px 1px;
+    }
     #studio-preview {
       position: relative;
       grid-area: preview;
@@ -230,7 +237,7 @@
     <dl class="studio-specs">
       <div id="frame-width-info"><dt>车架宽度</dt><dd id="spec-frame-width" class="font-mono-num"></dd></div>
       <div id="total-width-info"><dt>整车宽度</dt><dd id="spec-total-width" class="font-mono-num"></dd></div>
-      <div><dt>轮组</dt><dd id="spec-wheelset"></dd></div>
+      <div id="wheel-info"><dt>轮组</dt><dd id="spec-wheelset"></dd></div>
       <div id="posture-info"><dt id="spec-posture-label">接口</dt><dd id="spec-posture"></dd></div>
       <div id="child-capacity-info"><dt>儿童座位</dt><dd id="spec-children"></dd></div>
     </dl>
@@ -271,7 +278,7 @@
   </section>
 
   <!-- 02. 主车架宽度调节 -->
-  <section class="space-y-2.5 pt-3 border-t border-zinc-200/70">
+  <section id="width-options" class="space-y-2.5 pt-3 border-t border-zinc-200/70">
     <div class="flex justify-between items-center">
       <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">02 · Chassis Width</label>
       <span id="width-compat-hint" class="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">✓ 规格匹配</span>
@@ -293,7 +300,7 @@
   </section>
 
   <!-- 03. 车轮尺寸选择 -->
-  <section class="space-y-2.5 pt-3 border-t border-zinc-200/70">
+  <section id="wheel-options" class="space-y-2.5 pt-3 border-t border-zinc-200/70">
     <div class="flex justify-between items-center">
       <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">03 · Suspension Wheelset</label>
       <span class="text-[11px] text-zinc-500">四轮独立避震尺寸</span>
@@ -314,6 +321,17 @@
     </div>
   </section>
 
+  <section id="parts-panel" class="space-y-3 pt-3 border-t border-zinc-200/70" hidden>
+    <div class="space-y-1.5">
+      <label for="part-type" class="block text-xs font-semibold text-zinc-700">零件类型</label>
+      <select id="part-type" class="studio-select w-full bg-white border border-zinc-200 hover:border-zinc-400 rounded-2xl px-3.5 py-2.5 text-sm text-zinc-900 focus:outline-none focus:border-zinc-900 cursor-pointer"></select>
+    </div>
+    <div class="space-y-1.5" role="group" aria-labelledby="part-list-label">
+      <h2 id="part-list-label" class="text-xs font-semibold text-zinc-700">零件选项</h2>
+      <ul id="part-list" class="space-y-1.5"></ul>
+    </div>
+  </section>
+
 </aside>
 
 <main id="studio-preview" aria-label="推车三维预览">
@@ -324,6 +342,7 @@
     <button type="button" onclick="setCameraView('side')" id="cam-side" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">正侧视</button>
     <button type="button" onclick="setCameraView('front')" id="cam-front" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">正前视</button>
     <button type="button" onclick="setCameraView('top')" id="cam-top" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">俯视图</button>
+    <button type="button" onclick="setCameraView('bottom')" id="cam-bottom" class="px-2.5 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900 rounded-full transition">底视图</button>
   </nav>
 </main>
 
@@ -357,7 +376,7 @@
 // 1. no_cabin/      : 纯车架 6 种标准姿态模型
 // 2. single_cabin/  : 15 种单座舱模型 (S01 ~ S15)
 // 3. double_cabin/  : 35 种双座舱整体模型 (D01 ~ D35)
-// 4. other/         : 备用零部件模型 (主梁、副梁、横杠、轮子等)
+// 4. other/         : 独立零件模型与零件选项
 // ============================================================================
 const MODEL_MANIFEST = {
   baseUrl: './models',
@@ -371,17 +390,7 @@ const MODEL_MANIFEST = {
   },
 
   cabinPaths: (folder, id, width, postureState, wheelSize) =>
-    [`${folder}/${id}_w${width}_state${postureState}_wheel_${wheelSize}`],
-
-  // other 零部件路径映射
-  other: {
-    wheels: {
-      S: ['other/wheel_S'],
-      M: ['other/wheel_M'],
-      L: ['other/wheel_L']
-    },
-    crossbar: ['other/crossbar']
-  }
+    [`${folder}/${id}_w${width}_state${postureState}_wheel_${wheelSize}`]
 };
 
 // ============================================================================
@@ -456,10 +465,13 @@ const MODE_ROUTE_NAMES = { single: 'single', double: 'double', none: 'frame', ot
 const CABIN_MODES = Object.keys(MODE_ROUTE_NAMES);
 const FRAME_WIDTHS = [380, 550, 650];
 const WHEEL_SIZES = Object.keys(WHEEL_SPECS);
-const CAMERA_VIEWS = ['iso', 'side', 'front', 'top'];
+const CAMERA_VIEWS = ['iso', 'side', 'front', 'top', 'bottom'];
+const PART_TYPES = typeof STROLLER_PARTS === 'undefined' ? [] : STROLLER_PARTS;
 const state = {
-  cabinMode: 'single', // 'single' | 'double' | 'none'
+  cabinMode: 'single',
   selectedId: 'S05',
+  partType: PART_TYPES[0]?.id || '',
+  partId: PART_TYPES[0]?.parts[0]?.id || '',
   frameWidth: 550,
   wheelSize: 'M',
   postureState: 1,    // 1:安装完成, 2:折叠中, 3:折叠后站立, 4:拆车轮, 5:拆横杆, 6:均拆
@@ -654,13 +666,13 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 container.appendChild(renderer.domElement);
 
-const controls = new THREE.OrbitControls(camera, renderer.domElement);
+const controls = new THREE.FullOrbitControls(camera, renderer.domElement);
 controls.target.set(0, 420, 0);
 controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-controls.maxPolarAngle = Math.PI / 2 + 0.04;
+controls.dampingFactor = 0.16;
 controls.minDistance = 500;
 controls.maxDistance = 4200;
+controls.sync();
 
 const hemiLight = new THREE.HemisphereLight(0xFFFFFF, 0xE6E2DD, 0.85);
 scene.add(hemiLight);
@@ -1260,8 +1272,15 @@ async function updateScene() {
       // 若尚未上传对应模型，则在画布中央显示提示文字/占位
       console.warn(`未检测到 no_cabin 文件夹下的模型: 宽度 ${state.frameWidth}, 姿态 ${state.postureState}, 车轮 ${state.wheelSize}`);
     }
+  } else if (state.cabinMode === 'other') {
+    const part = getSelectedPart();
+    if (part) {
+      const model = await loadSelected(`part_${part.path}`, part.path);
+      if (currentToken !== renderToken) return;
+      if (model) nextGroup.add(model);
+    }
   } else {
-    // 2) 单座舱 (single_cabin) 或 双座舱 (double_cabin) 模式
+    // 单座舱或双座舱装配
     if (state.cabinMode === 'single') {
       const spec = SINGLE_CABINS.find(c => c.id === state.selectedId);
       if (spec) {
@@ -1292,28 +1311,6 @@ async function updateScene() {
       }
     }
 
-    if (state.cabinMode === 'other') {
-      const wheelPaths = MODEL_MANIFEST.other.wheels[state.wheelSize];
-      const wheelModel = await loadSelected(`other_wheel_${state.wheelSize}`, wheelPaths);
-      if (currentToken !== renderToken) return;
-      if (wheelModel) {
-        // 在四个角落放置车轮
-        const offset = state.frameWidth / 2 + 30;
-        [-1, 1].forEach(dx => {
-          [-1, 1].forEach(dz => {
-            const wClone = wheelModel.clone();
-            wClone.position.set(dx * offset, 0, dz * 250);
-            nextGroup.add(wClone);
-          });
-        });
-      }
-
-      const barModel = await loadSelected('other_crossbar', MODEL_MANIFEST.other.crossbar);
-      if (currentToken !== renderToken) return;
-      if (barModel) {
-        nextGroup.add(barModel);
-      }
-    }
   }
 
   prepareD02FacingModel(d02Model, d02Animations);
@@ -1348,13 +1345,20 @@ function fitPreview() {
   if (direction.lengthSq() < 1) direction.set(-1550, 560, 1650);
   direction.normalize();
   const size = sceneBounds.getSize(new THREE.Vector3());
-  const halfFov = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  const tangent = Math.tan(halfFov);
   const width = Math.hypot(size.x, size.z);
-  const distance = Math.max(1800, Math.max(size.y, width / camera.aspect) * 0.68 / halfFov);
+  const isPart = state.cabinMode === 'other';
+  const radius = Math.hypot(size.x, size.y, size.z) / 2;
+  const fitAngle = Math.min(halfFov, Math.atan(tangent * camera.aspect));
+  const distance = isPart
+    ? Math.max(45, radius * 1.15 / Math.sin(fitAngle))
+    : Math.max(1800, Math.max(size.y, width / camera.aspect) * 0.68 / tangent);
   controls.target.copy(sceneFocus);
   camera.position.copy(sceneFocus).addScaledVector(direction, distance);
-  controls.maxDistance = Math.max(4200, distance * 1.6);
-  controls.update();
+  controls.minDistance = isPart ? Math.max(15, radius * 0.65) : 500;
+  controls.maxDistance = isPart ? Math.max(800, distance * 4) : Math.max(4200, distance * 1.6);
+  controls.sync(true);
 }
 
 // ============================================================================
@@ -1368,6 +1372,66 @@ function getCabinList(mode) {
 
 function getCabinSpec(mode, id) {
   return getCabinList(mode).find(cabin => cabin.id === id);
+}
+
+const partButtons = new Map();
+
+function getPartType() {
+  return PART_TYPES.find(type => type.id === state.partType);
+}
+
+function getSelectedPart() {
+  return getPartType()?.parts.find(part => part.id === state.partId);
+}
+
+function selectPart(id) {
+  if (state.partId === id) return;
+  state.partId = id;
+  for (const [partId, button] of partButtons) {
+    const selected = partId === id;
+    button.classList.toggle('card-active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  updateScene();
+}
+
+function populatePartList() {
+  document.getElementById('part-type').value = state.partType;
+  const list = document.getElementById('part-list');
+  list.innerHTML = '';
+  partButtons.clear();
+  for (const part of getPartType()?.parts || []) {
+    const row = document.createElement('li');
+    const button = document.createElement('button');
+    const selected = part.id === state.partId;
+    button.type = 'button';
+    button.textContent = part.name;
+    button.className = 'card-btn w-full px-3 py-2.5 rounded-xl text-left text-sm leading-snug';
+    button.classList.toggle('card-active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    button.addEventListener('click', () => selectPart(part.id));
+    partButtons.set(part.id, button);
+    row.appendChild(button);
+    list.appendChild(row);
+  }
+}
+
+function buildPartControls() {
+  const select = document.getElementById('part-type');
+  for (const type of PART_TYPES) {
+    const option = document.createElement('option');
+    option.value = type.id;
+    option.textContent = type.name;
+    select.appendChild(option);
+  }
+  select.addEventListener('change', () => {
+    const type = PART_TYPES.find(item => item.id === select.value);
+    if (!type || type.id === state.partType) return;
+    state.partType = type.id;
+    state.partId = type.parts[0]?.id || '';
+    populatePartList();
+    updateScene();
+  });
 }
 
 function populateCabinSelect() {
@@ -1398,6 +1462,12 @@ function populateCabinSelect() {
 
 function setCabinMode(mode) {
   state.cabinMode = mode;
+  const isParts = mode === 'other';
+  document.getElementById('parts-panel').hidden = !isParts;
+  document.getElementById('width-options').hidden = isParts;
+  document.getElementById('wheel-options').hidden = isParts;
+  document.getElementById('studio-preview').setAttribute('aria-label', isParts ? '零件三维预览' : '推车三维预览');
+  if (isParts) populatePartList();
   CABIN_MODES.forEach(m => {
     const btn = document.getElementById(`mode-${m}`);
     if (btn) btn.classList.toggle('seg-active', m === mode);
@@ -1512,11 +1582,12 @@ function updateProductHeader(cabinPreview = null) {
     children = 0;
     description = '';
   } else if (isParts) {
-    title = '其他零部件';
-    code = 'OTHER';
-    posture = '';
+    const part = getSelectedPart();
+    title = part?.name || '其他零部件';
+    code = part?.id || '';
+    posture = getPartType()?.name;
     children = 0;
-    description = '独立展示车轮与横杆。';
+    description = part?.description || '';
   } else if (isDouble && spec?.id === 'D02') {
     description = frameWidth === 650
       ? '宽档保留中档卡座，每座左右各加一块独立加宽转接件。座舱为概念设计。'
@@ -1528,15 +1599,18 @@ function updateProductHeader(cabinPreview = null) {
   }
 
   document.getElementById('spec-title').textContent = title || '模块化推车';
-  document.getElementById('spec-code').textContent = code || '';
+  const codeBadge = document.getElementById('spec-code');
+  codeBadge.textContent = code || '';
+  codeBadge.hidden = !code;
   document.getElementById('spec-frame-width').textContent = `${frameWidth} mm · ${widthName}`;
   document.getElementById('spec-total-width').textContent = totalWidth;
   document.getElementById('spec-wheelset').textContent = wheelSpec.name;
-  document.getElementById('spec-posture-label').textContent = isChassis ? '姿态' : '接口';
+  document.getElementById('spec-posture-label').textContent = isParts ? '类型' : isChassis ? '姿态' : '接口';
   document.getElementById('spec-posture').textContent = posture || '';
   document.getElementById('spec-children').textContent = `${children} 个`;
   document.getElementById('frame-width-info').hidden = isParts;
   document.getElementById('total-width-info').hidden = isParts;
+  document.getElementById('wheel-info').hidden = isParts;
   document.getElementById('posture-info').hidden = !posture;
   document.getElementById('child-capacity-info').hidden = !children;
   const descriptionEl = document.getElementById('spec-desc');
@@ -1549,18 +1623,21 @@ function setCameraView(view, skipRouteUpdate = false) {
   state.cameraView = view;
   CAMERA_VIEWS.forEach(v => {
     const btn = document.getElementById(`cam-${v}`);
-    if (btn) btn.classList.toggle('seg-active', v === view);
+    if (btn) {
+      btn.classList.toggle('seg-active', v === view);
+      btn.setAttribute('aria-pressed', String(v === view));
+    }
   });
   const distance = camera.position.distanceTo(controls.target) || 2600;
   const direction = new THREE.Vector3();
-  const frontAlongNegativeX = state.cabinMode !== 'other';
   if (view === 'iso') direction.set(-1550, 560, 1650).normalize();
-  if (view === 'side') direction.set(frontAlongNegativeX ? 0 : 1, 0, frontAlongNegativeX ? 1 : 0);
-  if (view === 'front') direction.set(frontAlongNegativeX ? -1 : 0, 0, frontAlongNegativeX ? 0 : 1);
-  if (view === 'top') direction.set(0, 1, 0.005);
+  if (view === 'side') direction.set(0, 0, 1);
+  if (view === 'front') direction.set(-1, 0, 0);
+  if (view === 'top') direction.set(0, 1, 0);
+  if (view === 'bottom') direction.set(0, -1, 0);
   camera.position.copy(sceneFocus).addScaledVector(direction, distance);
   controls.target.copy(sceneFocus);
-  controls.update();
+  controls.sync();
   if (!skipRouteUpdate) syncConfiguratorRoute();
 }
 
@@ -1581,7 +1658,7 @@ resizePreview();
 // ============================================================================
 // 6. Configurator route: use the address as the source for a page refresh.
 // ============================================================================
-const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'view', 'facing', 'front', 'rear', 'd02'];
+const ROUTE_PARAMETERS = ['mode', 'cabin', 'width', 'wheel', 'state', 'type', 'part', 'view', 'facing', 'front', 'rear', 'd02'];
 
 function d02PoseRouteValues(component) {
   if (component.key === 'backrest') return D02_BACKREST_ANGLES;
@@ -1618,10 +1695,15 @@ function syncConfiguratorRoute() {
   const query = url.searchParams;
   ROUTE_PARAMETERS.forEach(parameter => query.delete(parameter));
   query.set('mode', MODE_ROUTE_NAMES[state.cabinMode]);
-  if (getCabinSpec(state.cabinMode, state.selectedId)) query.set('cabin', state.selectedId);
-  query.set('width', String(state.frameWidth));
-  query.set('wheel', state.wheelSize);
-  if (state.cabinMode === 'none' || state.postureState !== 1) query.set('state', String(state.postureState));
+  if (state.cabinMode === 'other') {
+    if (state.partType) query.set('type', state.partType);
+    if (state.partId) query.set('part', state.partId);
+  } else {
+    if (getCabinSpec(state.cabinMode, state.selectedId)) query.set('cabin', state.selectedId);
+    query.set('width', String(state.frameWidth));
+    query.set('wheel', state.wheelSize);
+    if (state.cabinMode === 'none' || state.postureState !== 1) query.set('state', String(state.postureState));
+  }
   query.set('view', state.cameraView);
   if (state.cabinMode === 'double' && state.selectedId === 'D02') {
     if (state.d02Facing !== 'FF') query.set('facing', state.d02Facing);
@@ -1639,6 +1721,20 @@ function restoreConfiguratorRoute() {
   const modeForId = CABIN_MODES.find(mode => getCabinSpec(mode, cabinId));
   const requestedMode = CABIN_MODES.find(mode => mode === modeName || MODE_ROUTE_NAMES[mode] === modeName);
   const mode = requestedMode || modeForId || (legacy ? 'double' : 'single');
+  const view = query.get('view')?.toLowerCase();
+  if (mode === 'other') {
+    const partId = query.get('part')?.toLowerCase();
+    const categoryId = query.get('type')?.toLowerCase();
+    const type = PART_TYPES.find(item => item.id === categoryId) ||
+      PART_TYPES.find(item => item.parts.some(part => part.id.toLowerCase() === partId)) ||
+      PART_TYPES[0];
+    const part = type?.parts.find(item => item.id.toLowerCase() === partId) || type?.parts[0];
+    state.partType = type?.id || '';
+    state.partId = part?.id || '';
+    setCameraView(CAMERA_VIEWS.includes(view) ? view : 'iso', true);
+    setCabinMode(mode);
+    return;
+  }
   const defaultCabin = mode === 'double' && legacy ? 'D02' : 'S05';
   const cabin = getCabinSpec(mode, cabinId) || getCabinSpec(mode, defaultCabin) || getCabinList(mode)[0];
   const preset = cabin?.id === 'D02' ? legacy : null;
@@ -1646,8 +1742,6 @@ function restoreConfiguratorRoute() {
   const wheel = query.get('wheel')?.toUpperCase();
   const presetWheel = preset?.[2].toUpperCase();
   const posture = query.get('state') || '';
-  const view = query.get('view')?.toLowerCase();
-
   state.cabinMode = mode;
   state.selectedId = cabin?.id || 'S05';
   setFrameWidth(cabin && !cabin.widths.includes(width) ? cabin.widths[0] : width, true);
@@ -1664,6 +1758,7 @@ function restoreConfiguratorRoute() {
 }
 
 buildD02StateControls();
+buildPartControls();
 window.addEventListener('popstate', restoreConfiguratorRoute);
 restoreConfiguratorRoute();
 
@@ -1671,6 +1766,8 @@ function animate(now = performance.now()) {
   requestAnimationFrame(animate);
   animateD02Poses(now);
   controls.update();
+  shadowPlane.visible = camera.position.y > 0;
+  ringMesh.visible = state.cabinMode !== 'other' && camera.position.y > ringMesh.position.y;
   renderer.render(scene, camera);
 }
 animate();
